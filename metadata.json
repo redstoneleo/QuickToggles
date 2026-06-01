@@ -1,0 +1,6 @@
+{
+  "name": "Quick Control Panel",
+  "description": "An Android desktop widget with root support to toggle mobile data, Wi-Fi, GPS, and flashlight, with status color indicators and automatic screen-on/off mobile data toggle service.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

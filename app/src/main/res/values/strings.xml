@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Quick Control Panel</string>
+    <string name="widget_loading">正在加载...</string>
+    <string name="auto_data_title">屏亮/屏熄 自动流量控制</string>
+    <string name="auto_data_summary">当屏幕点亮时自动开启移动数据，屏幕熄灭时自动关闭移动数据，以节省电量和流量。</string>
+    <string name="low_memory_optimization">低内存优化</string>
+    <string name="low_memory_desc">在内存不足时，后台服务会保持紧凑状态继续稳定运行。</string>
+    <string name="root_status_title">Root 权限状态</string>
+    <string name="root_status_granted">已获取 Root 权限 (能完美控制移动数据/GPS)</string>
+    <string name="root_status_denied">未获取 Root 权限 (控制可能受限，建议授予)</string>
+</resources>

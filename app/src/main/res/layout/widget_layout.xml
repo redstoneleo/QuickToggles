@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="@drawable/widget_background"
+    android:gravity="center"
+    android:weightSum="4"
+    android:baselineAligned="false">
+
+    <!-- DATA SWITCH -->
+    <LinearLayout
+        android:id="@+id/btn_data_container"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:layout_margin="4dp"
+        android:background="@drawable/tile_background"
+        android:gravity="center"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:padding="6dp">
+
+        <ImageView
+            android:id="@+id/btn_data_icon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:src="@drawable/ic_cellular_data"
+            android:contentDescription="Toggle Mobile Data" />
+
+        <TextView
+            android:id="@+id/btn_data_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="流量"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:maxLines="1" />
+    </LinearLayout>
+
+    <!-- WIFI SWITCH -->
+    <LinearLayout
+        android:id="@+id/btn_wifi_container"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:layout_margin="4dp"
+        android:background="@drawable/tile_background"
+        android:gravity="center"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:padding="6dp">
+
+        <ImageView
+            android:id="@+id/btn_wifi_icon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:src="@drawable/ic_wifi"
+            android:contentDescription="Toggle WiFi" />
+
+        <TextView
+            android:id="@+id/btn_wifi_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="WiFi"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:maxLines="1" />
+    </LinearLayout>
+
+    <!-- GPS SWITCH -->
+    <LinearLayout
+        android:id="@+id/btn_gps_container"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:layout_margin="4dp"
+        android:background="@drawable/tile_background"
+        android:gravity="center"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:padding="6dp">
+
+        <ImageView
+            android:id="@+id/btn_gps_icon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:src="@drawable/ic_gps"
+            android:contentDescription="Toggle GPS" />
+
+        <TextView
+            android:id="@+id/btn_gps_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="GPS"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:maxLines="1" />
+    </LinearLayout>
+
+    <!-- FLASHLIGHT SWITCH -->
+    <LinearLayout
+        android:id="@+id/btn_flash_container"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:layout_margin="4dp"
+        android:background="@drawable/tile_background"
+        android:gravity="center"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:padding="6dp">
+
+        <ImageView
+            android:id="@+id/btn_flash_icon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:src="@drawable/ic_flashlight"
+            android:contentDescription="Toggle Flashlight" />
+
+        <TextView
+            android:id="@+id/btn_flash_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="手电筒"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:maxLines="1" />
+    </LinearLayout>
+
+</LinearLayout>
