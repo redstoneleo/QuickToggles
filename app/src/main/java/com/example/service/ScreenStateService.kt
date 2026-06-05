@@ -28,6 +28,8 @@ class ScreenStateService : Service() {
 
     private var screenReceiver: BroadcastReceiver? = null
     private var wasFlashlightOnWhenScreenOff = false
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var usb5gRunnable: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -150,9 +152,9 @@ class ScreenStateService : Service() {
 
                             when (action) {
                                 Intent.ACTION_SCREEN_ON -> {
-                                    Log.i(TAG, "Screen is ON -> Delaying 0.5s before turning mobile data ON")
+                                    Log.i(TAG, "Screen is ON -> Delaying 0.35s before turning mobile data ON")
                                     try {
-                                        Thread.sleep(500)
+                                        Thread.sleep(350)
                                     } catch (e: InterruptedException) {
                                         Log.e(TAG, "Delay interrupted: ${e.message}")
                                     }
@@ -194,7 +196,8 @@ class ScreenStateService : Service() {
 
                 // 3. USB Smart 5G Dynamic Adjustment
                 if (isUsb5g) {
-                    checkAndApplyUsb5gAdjustment(context)
+                    val delay = if (action == Intent.ACTION_SCREEN_ON && isAutoData) 1800L else 500L
+                    checkAndApplyUsb5gAdjustment(context, delay)
                 }
             }
         }
@@ -600,26 +603,30 @@ class ScreenStateService : Service() {
         return finalCount
     }
 
-    private fun checkAndApplyUsb5gAdjustment(context: Context) {
+    private fun checkAndApplyUsb5gAdjustment(context: Context, delayMillis: Long = 500L) {
         val isUsb5g = PrefsManager.isUsb5gToggleEnabled(context)
         if (!isUsb5g) return
 
-        Thread {
-            try {
-                // Wait briefly for state settling
-                Thread.sleep(500)
-                
-                val plugged = getBatteryPluggedState(context)
-                // Treat any external plugged state != 0 as USB powered (since AC chargers are also USB)
-                val isUsbPowered = (plugged != 0) || isUsbConnectedToComputer(context)
-                val targetMode = if (isUsbPowered) "5G" else "4G"
-                
-                Log.i(TAG, "checkAndApplyUsb5gAdjustment: plugged=$plugged, isUsbPowered=$isUsbPowered -> Setting preferred network to $targetMode")
-                ControlManager.setPreferredNetworkType(context, targetMode)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error adjusting USB 5G network mode: ${e.message}")
-            }
-        }.start()
+        usb5gRunnable?.let { handler.removeCallbacks(it) }
+
+        val runnable = Runnable {
+            Thread {
+                try {
+                    val plugged = getBatteryPluggedState(context)
+                    // Treat any external plugged state != 0 as USB powered (since AC chargers are also USB)
+                    val isUsbPowered = (plugged != 0) || isUsbConnectedToComputer(context)
+                    val isDataOn = ControlManager.isMobileDataEnabled(context)
+                    val targetMode = if (isUsbPowered && isDataOn) "5G" else "4G"
+                    
+                    Log.i(TAG, "checkAndApplyUsb5gAdjustment: plugged=$plugged, isUsbPowered=$isUsbPowered, isDataOn=$isDataOn -> Setting preferred network to $targetMode")
+                    ControlManager.setPreferredNetworkType(context, targetMode)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error adjusting USB 5G network mode: ${e.message}")
+                }
+            }.start()
+        }
+        usb5gRunnable = runnable
+        handler.postDelayed(runnable, delayMillis)
     }
 
     private fun refreshWidget(context: Context) {
@@ -631,6 +638,7 @@ class ScreenStateService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "ScreenStateService Destroyed, cleaning up receivers")
+        usb5gRunnable?.let { handler.removeCallbacks(it) }
         try {
             screenReceiver?.let {
                 unregisterReceiver(it)

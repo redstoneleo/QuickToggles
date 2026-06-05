@@ -113,14 +113,14 @@ object ControlManager {
                     
                     // Poll and verify if state actually transitioned
                     var verified = false
-                    for (t in 1..6) {
-                        try {
-                            Thread.sleep(150)
-                        } catch (e: Exception) {}
+                    for (t in 1..8) {
                         if (isMobileDataEnabled(context) == enabled) {
                             verified = true
                             break
                         }
+                        try {
+                            Thread.sleep(100)
+                        } catch (e: Exception) {}
                     }
                     if (verified) {
                         return true
@@ -161,16 +161,16 @@ object ControlManager {
                 // Sync settings database
                 ShellUtils.runCommand("settings put global mobile_data $valInt", useRoot = true)
                 
-                // Poll check up to 6 times (total 900ms) for real hardware state transition
+                // Poll check up to 8 times for real hardware state transition
                 var verified = false
-                for (t in 1..6) {
-                    try {
-                        Thread.sleep(150)
-                    } catch (e: Exception) {}
+                for (t in 1..8) {
                     if (isMobileDataEnabled(context) == enabled) {
                         verified = true
                         break
                     }
+                    try {
+                        Thread.sleep(100)
+                    } catch (e: Exception) {}
                 }
                 if (verified) {
                     Log.i(TAG, "SUCCESS: Strategy $strategyIndex is effective! Saving to cache.")
@@ -457,6 +457,11 @@ object ControlManager {
         commands.add("settings put global fiveg_user_enable_2 $is5G")
         commands.add("settings put global nr_mode_enabled $is5G")
         commands.add("settings put global fiveg_switch $is5G")
+        
+        // AOSP / LineageOS 12+ specific toggles
+        commands.add("settings put global user_enabled_nr_config $is5G")
+        commands.add("settings put global user_fiveg_switch $is5G")
+        commands.add("settings put global setup_wizard_fiveg_toggle $is5G")
         
         // Settings database entries for global defaults
         commands.add("settings put global preferred_network_mode $targetValStr1")
