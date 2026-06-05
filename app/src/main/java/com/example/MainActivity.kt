@@ -136,7 +136,6 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     var autoDataToggle by remember { mutableStateOf(PrefsManager.isAutoDataToggleEnabled(context)) }
     var flashlightPowerControl by remember { mutableStateOf(PrefsManager.isFlashlightPowerControlEnabled(context)) }
     var usb5gToggle by remember { mutableStateOf(PrefsManager.isUsb5gToggleEnabled(context)) }
-    val is5GSupportedDevice = remember { ControlManager.is5GSupported(context) }
     var activeColorHex by remember { mutableStateOf(PrefsManager.getActiveColor(context)) }
     var inactiveColorHex by remember { mutableStateOf(PrefsManager.getInactiveColor(context)) }
 
@@ -602,8 +601,8 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                         )
                         val rules = listOf(
                             "① 息屏自动省电：关屏息屏时，立即自动关闭移动数据，保障设备休眠省电与降温成效。",
-                            "② 亮屏延时恢复：亮屏解锁时，引入 0.8 秒 延迟缓冲开启设计，供以舒适直观的确已切断之视觉确认反馈。",
-                            "③ USB 连接防护：当 USB 切换/配置为共享网络且跟 PC 数据连接时，息屏后始终维持流量在线，防止调试或热点共享因锁屏而中断网络。",
+                            "② 亮屏延时恢复：亮屏解锁时，引入 0.5 秒 延迟缓冲开启设计，供以舒适直观的确已切断之视觉确认反馈。",
+                            "③ USB 连接防护：当 USB 切换/配置为共享网络且有连接到电脑时（无论息屏还是亮屏），将自动开启流量且息屏后始终维持流量在线不断网。若仅为充电器供电则不强制打开流量。",
                             "④ 热点连网设备保活：只要开启无线热点且尚存在任何外联接入设备，就强制维持流量在线永不断线。"
                         )
                         rules.forEach { rule ->
@@ -770,56 +769,32 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "在手机流量开启的情况下，如果手机有通过 USB 外接供电，那么就开启 5G 网络，否则就退回 4G 网络（不仅降温防烫，也能在大流量场景和日常省电中智能求取最优解）。",
+                            text = "已启用深度硬件兼容模式 (支持小米、OPPO、VIVO 等机型全局 5G 开关强切)。插入 USB 供电时尝试并发切换至 5G 网络，断开则秒切 4G，兼顾高性能与极致省电。",
                             color = Color(0xFF1B5E20).copy(alpha = 0.8f),
                             fontSize = 12.sp,
                             lineHeight = 17.sp
                         )
                         Spacer(modifier = Modifier.height(6.dp))
-                        if (is5GSupportedDevice) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFFC8E6C9).copy(alpha = 0.7f))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = Color(0xFF1B5E20),
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "已检测到本机硬件支持 5G 网络规则",
-                                    color = Color(0xFF1B5E20),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        } else {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFFFFE082).copy(alpha = 0.7f))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = Color(0xFFE65100),
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "未检测到 5G 硬件，已启用 4G 安全降级保护",
-                                    color = Color(0xFFE65100),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFC8E6C9).copy(alpha = 0.7f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF1B5E20),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "智能策略就绪",
+                                color = Color(0xFF1B5E20),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
 

@@ -371,7 +371,7 @@ object ControlManager {
                                 
                                 when (key) {
                                     "_id" -> subId = value.toIntOrNull() ?: -1
-                                    "sim_id" -> slotIndex = value.toIntOrNull() ?: -1
+                                    "sim_id", "slot_index" -> slotIndex = value.toIntOrNull() ?: -1
                                     "phone_id" -> {
                                         val pId = value.toIntOrNull() ?: -1
                                         if (pId >= 0) slotIndex = pId
@@ -381,15 +381,15 @@ object ControlManager {
                                 }
                             }
                             
-                            if (subId != -1 && slotIndex in 0..1) {
+                            if (subId != -1) { // We don't care if slotIndex is strictly 0 or 1, we want all subIds!
                                 val isActive = true
-                                val finalSlotIndex = slotIndex
+                                val finalSlotIndex = if (slotIndex >= 0) slotIndex else 0 // Default to 0
                                 if (list.none { it.subId == subId }) {
                                     list.add(
                                         SimInfo(
                                             subId = subId,
                                             slotIndex = finalSlotIndex,
-                                            displayName = if (displayName.isNotEmpty()) displayName else "SIM Slot ${finalSlotIndex + 1}",
+                                            displayName = if (displayName.isNotEmpty()) displayName else "SIM (Sub $subId)",
                                             isActive = isActive,
                                             isEmbedded = false,
                                             number = number
@@ -438,102 +438,69 @@ object ControlManager {
         // mode is "4G" or "5G"
         Log.i(TAG, "setPreferredNetworkType requested: $mode")
         
-        // Safety guard: if 5G is requested but device does not support it, default to 4G mode to prevent carrier dropping
-        val actualMode = if (mode == "5G") {
-            if (!is5GSupported(context)) {
-                Log.w(TAG, "Device does not support 5G! Gracefully falling back to 4G to prevent modem errors or signal drop.")
-                "4G"
-            } else {
-                "5G"
-            }
-        } else {
-            "4G"
-        }
+        val actualMode = mode
 
-        // Standard AOSP values:
-        // 9 = NETWORK_MODE_LTE_GSM_WCDMA (4G Auto)
-        // 26 = NETWORK_MODE_NR_LTE_GSM_WCDMA (5G Auto)
-        val targetVal = if (actualMode == "5G") "26" else "9"
+        // Android standard / manufacturer specific values
+        // 26 = NR_LTE_GSM_WCDMA (5G Auto)
+        // 33 = NR_LTE_TDSCDMA_CDMA_EVDO_GSM_WCDMA (5G Global/China)
+        // 9  = LTE_GSM_WCDMA (4G Auto)
+        // 22 = LTE_TDSCDMA_CDMA_EVDO_GSM_WCDMA (4G Global/China)
+        val targetValStr1 = if (actualMode == "5G") "33" else "22"
+        val targetValStr2 = if (actualMode == "5G") "26" else "9"
+        val is5G = if (actualMode == "5G") "1" else "0"
         
         val commands = mutableListOf<String>()
         
+        // Brand-specific 5G Toggles (Xiaomi, Oppo, Vivo, Samsung, etc)
+        commands.add("settings put global fiveg_user_enable $is5G")
+        commands.add("settings put global fiveg_user_enable_1 $is5G")
+        commands.add("settings put global fiveg_user_enable_2 $is5G")
+        commands.add("settings put global nr_mode_enabled $is5G")
+        commands.add("settings put global fiveg_switch $is5G")
+        
         // Settings database entries for global defaults
-        commands.add("settings put global preferred_network_mode $targetVal")
-        commands.add("settings put global preferred_network_mode1 $targetVal")
-        commands.add("settings put global preferred_network_mode2 $targetVal")
+        commands.add("settings put global preferred_network_mode $targetValStr1")
+        commands.add("settings put global preferred_network_mode1 $targetValStr1")
+        commands.add("settings put global preferred_network_mode2 $targetValStr1")
         
         // Query active mobile SIM cards and configure them
         val sims = getSimCardList(context)
         for (sim in sims) {
             val subId = sim.subId
             val slotIndex = sim.slotIndex
-            Log.d(TAG, "Setting preferred network mode $actualMode (val $targetVal) for SubId: $subId, Slot: $slotIndex")
+            Log.d(TAG, "Setting preferred network mode $actualMode for SubId: $subId, Slot: $slotIndex")
             
-            // Standard AOSP and vendor phone commands
-            commands.add("cmd phone set-preferred-network-type $subId $targetVal")
+            // Try standard AOSP command with 33, then fallback to 26 for 5G
+            commands.add("cmd phone set-preferred-network-type $subId $targetValStr1")
+            commands.add("cmd phone set-preferred-network-type $subId $targetValStr2")
+            
+            // On some Custom ROMs (e.g. LineageOS patches), set-preferred-network-type expects the slot index (0 or 1)
+            if (slotIndex != subId && slotIndex >= 0) {
+                commands.add("cmd phone set-preferred-network-type $slotIndex $targetValStr1")
+                commands.add("cmd phone set-preferred-network-type $slotIndex $targetValStr2")
+            }
             
             // Settings DB tables
-            commands.add("settings put global preferred_network_mode_$subId $targetVal")
-            commands.add("settings put global preferred_network_mode_subId $subId")
-            commands.add("settings put global preferred_network_mode_subid $subId")
-            commands.add("settings put global preferred_network_mode$slotIndex $targetVal")
-            commands.add("settings put global preferred_network_mode_${slotIndex} $targetVal")
+            commands.add("settings put global preferred_network_mode_$subId $targetValStr1")
+            commands.add("settings put global preferred_network_mode$slotIndex $targetValStr1")
+            commands.add("settings put global preferred_network_mode_${slotIndex} $targetValStr1")
         }
         
-        // Fallback for subIds 0 to 3 in case standard API is restricted or empty
+        // Fallback for logic if sim list somehow empty
         if (sims.isEmpty()) {
-            for (fallbackSubId in 0..3) {
-                commands.add("cmd phone set-preferred-network-type $fallbackSubId $targetVal")
-                commands.add("settings put global preferred_network_mode_$fallbackSubId $targetVal")
+            for (fallbackSubId in 0..2) {
+                commands.add("cmd phone set-preferred-network-type $fallbackSubId $targetValStr1")
+                commands.add("cmd phone set-preferred-network-type $fallbackSubId $targetValStr2")
+                commands.add("settings put global preferred_network_mode_$fallbackSubId $targetValStr1")
             }
         }
         
         val runResult = ShellUtils.runCommands(commands, useRoot = true)
         Log.i(TAG, "setPreferredNetworkType executed with result: ${runResult.isSuccess}")
+        
+        // Broadcast a generic connectivity intent to force settings refresh on some OEMs
+        ShellUtils.runCommand("am broadcast -a android.intent.action.CONFIGURATION_CHANGED", useRoot = true)
+        
         return runResult.isSuccess
-    }
-
-    fun is5GSupported(context: Context): Boolean {
-        try {
-            val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-                ?: return false
-            
-            // 1. API 33+ supported radio access family check
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val raf = telephonyManager.supportedRadioAccessFamily
-                val nrBitmask = 1L shl (19) // TelephonyManager.NETWORK_TYPE_NR is 20, bitmask is (1 << 19)
-                if ((raf and nrBitmask) != 0L) {
-                    return true
-                }
-            }
-
-            // 2. Querying current preferred network mode from Settings database.
-            // If any of the existing preferred network setting is >= 23, it means the device/carrier supports 5G.
-            val resolver = context.contentResolver
-            val mode0 = android.provider.Settings.Global.getInt(resolver, "preferred_network_mode", -1)
-            val mode1 = android.provider.Settings.Global.getInt(resolver, "preferred_network_mode1", -1)
-            val mode2 = android.provider.Settings.Global.getInt(resolver, "preferred_network_mode2", -1)
-            
-            if (mode0 >= 23 || mode1 >= 23 || mode2 >= 23) {
-                return true
-            }
-
-            // 3. Fallback to system properties
-            val getprop = ShellUtils.runCommands(listOf("getprop | grep -i preferred_network_mode"), useRoot = false)
-            if (getprop.isSuccess) {
-                val output = getprop.stdout
-                val regex = Regex("preferred_network_mode.*?:\\s*\\[(\\d+)\\]")
-                val matches = regex.findAll(output)
-                for (match in matches) {
-                    val value = match.groupValues[1].toIntOrNull()
-                    if (value != null && value >= 23) {
-                        return true
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "is5GSupported Exception: ${e.message}")
-        }
-        return false
     }
 }

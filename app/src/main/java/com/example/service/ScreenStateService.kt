@@ -148,23 +148,11 @@ class ScreenStateService : Service() {
                             
                             Log.d(TAG, "Receiver event action: $action, isUsbConnected: $isUsbConnected, isTetheringConfigured: $isTetheringConfigured")
 
-                            // Safeguard: If USB Tethering configuration is active on connected computer line,
-                            // we must ensure mobile data remains enabled to share connectivity.
-                            if (isTetheringConfigured) {
-                                Log.i(TAG, "USB Tethering active configuration detected. Forcing mobile data ON to maintain pc network sharing.")
-                                val currentOn = ControlManager.isMobileDataEnabled(context)
-                                if (!currentOn) {
-                                    ControlManager.setMobileDataEnabled(context, true)
-                                    refreshWidget(context)
-                                }
-                                return@Thread
-                            }
-
                             when (action) {
                                 Intent.ACTION_SCREEN_ON -> {
-                                    Log.i(TAG, "Screen is ON -> Delaying 0.8s before turning mobile data ON")
+                                    Log.i(TAG, "Screen is ON -> Delaying 0.5s before turning mobile data ON")
                                     try {
-                                        Thread.sleep(800)
+                                        Thread.sleep(500)
                                     } catch (e: InterruptedException) {
                                         Log.e(TAG, "Delay interrupted: ${e.message}")
                                     }
@@ -172,47 +160,28 @@ class ScreenStateService : Service() {
                                     ControlManager.setMobileDataEnabled(context, true)
                                     refreshWidget(context)
                                 }
-                                Intent.ACTION_SCREEN_OFF -> {
-                                    val isWifiAp = isWifiApEnabled(context)
+                                Intent.ACTION_POWER_CONNECTED,
+                                Intent.ACTION_POWER_DISCONNECTED,
+                                "android.hardware.usb.action.USB_STATE" -> {
                                     val isUsbTethering = isUsbTetheringConfigured(context)
-                                    val isBtTethering = isBluetoothTetheringActive()
-                                    val isAudioActive = isAudioPlaying(context)
-
-                                    Log.i(TAG, "Screen is OFF. Sharing state: WifiAp=$isWifiAp, UsbTethering=$isUsbTethering, BtTethering=$isBtTethering, AudioActive=$isAudioActive")
-
-                                    if (isAudioActive) {
-                                        Log.i(TAG, "Audio playback detected. Maintaining mobile data/cellular connection while screen is OFF.")
-                                        return@Thread
-                                    }
-
-                                    // Special Handle: USB sharing network (Tethering) is physical wire-bound.
-                                    // As long as it is active, keep cellular traffic alive. (bypasses raw client count scan)
-                                    if (isUsbTethering) {
-                                        Log.i(TAG, "USB sharing network (Tethering) active. Force keeping cellular data ONLINE.")
-                                        return@Thread
-                                    }
-
-                                    // Special Handle: Bluetooth tethering is direct point-to-point. Keep cellular alive.
-                                    if (isBtTethering) {
-                                        Log.i(TAG, "Bluetooth tethering active. Force keeping cellular data ONLINE.")
-                                        return@Thread
-                                    }
-
-                                    // For Wireless Wi-Fi Access Point (Hotspot), verify if client devices are active.
-                                    if (isWifiAp) {
-                                        val clientCount = getSharingClientCount()
-                                        Log.i(TAG, "Wi-Fi Hotspot is active. Active clients count: $clientCount")
-                                        if (clientCount > 0) {
-                                            Log.i(TAG, "Active Wi-Fi Hotspot clients ($clientCount) detected. Maintaining mobile data/cellular connection.")
-                                            return@Thread
-                                        } else {
-                                            Log.i(TAG, "Wi-Fi Hotspot active but has 0 connected clients. Proceeding to turn mobile data OFF.")
+                                    val isPcConnected = isUsbConnectedToComputer(context)
+                                    if (isUsbTethering && isPcConnected) {
+                                        Log.i(TAG, "USB Tethering to PC ($action) detected. Assuring mobile data is ON.")
+                                        val currentOn = ControlManager.isMobileDataEnabled(context)
+                                        if (!currentOn) {
+                                            ControlManager.setMobileDataEnabled(context, true)
+                                            refreshWidget(context)
+                                        }
+                                    } else {
+                                        val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                                        if (!pm.isInteractive) {
+                                            Log.i(TAG, "State changed ($action): Not Tethered to PC while screen is OFF. Evaluating shutoff...")
+                                            evaluateScreenOffState(context)
                                         }
                                     }
-
-                                    Log.i(TAG, "Screen is OFF -> (bg) Turning mobile data OFF")
-                                    ControlManager.setMobileDataEnabled(context, false)
-                                    refreshWidget(context)
+                                }
+                                Intent.ACTION_SCREEN_OFF -> {
+                                    evaluateScreenOffState(context)
                                 }
                             }
                         } catch (e: Exception) {
@@ -244,6 +213,51 @@ class ScreenStateService : Service() {
         }
     }
 
+    private fun evaluateScreenOffState(context: Context) {
+        val isWifiAp = isWifiApEnabled(context)
+        val isUsbTethering = isUsbTetheringConfigured(context)
+        val isBtTethering = isBluetoothTetheringActive()
+        val isAudioActive = isAudioPlaying(context)
+        val isPcConnected = isUsbConnectedToComputer(context)
+
+        Log.i(TAG, "Screen is OFF. Sharing state: WifiAp=$isWifiAp, UsbTethering=$isUsbTethering, BtTethering=$isBtTethering, AudioActive=$isAudioActive, PcConnected=$isPcConnected")
+
+        if (isUsbTethering && isPcConnected) {
+            Log.i(TAG, "Device is connected to PC and USB Tethering is configured. Force keeping mobile data ONLINE while screen is OFF.")
+            val currentOn = ControlManager.isMobileDataEnabled(context)
+            if (!currentOn) {
+                ControlManager.setMobileDataEnabled(context, true)
+                refreshWidget(context)
+            }
+            return
+        }
+
+        if (isAudioActive) {
+            Log.i(TAG, "Audio playback detected. Maintaining mobile data/cellular connection while screen is OFF.")
+            return
+        }
+
+        if (isBtTethering) {
+            Log.i(TAG, "Bluetooth tethering active. Force keeping cellular data ONLINE.")
+            return
+        }
+
+        if (isWifiAp) {
+            val clientCount = getSharingClientCount()
+            Log.i(TAG, "Wi-Fi Hotspot is active. Active clients count: $clientCount")
+            if (clientCount > 0) {
+                Log.i(TAG, "Active Wi-Fi Hotspot clients ($clientCount) detected. Maintaining mobile data/cellular connection.")
+                return
+            } else {
+                Log.i(TAG, "Wi-Fi Hotspot active but has 0 connected clients. Proceeding to turn mobile data OFF.")
+            }
+        }
+
+        Log.i(TAG, "Screen is OFF -> (bg) Turning mobile data OFF")
+        ControlManager.setMobileDataEnabled(context, false)
+        refreshWidget(context)
+    }
+
     private fun getSystemProperty(key: String, defaultValue: String = ""): String {
         return try {
             val clazz = Class.forName("android.os.SystemProperties")
@@ -256,11 +270,11 @@ class ScreenStateService : Service() {
     }
 
     private fun isUsbTetheringConfigured(context: Context): Boolean {
-        val persistConfig = getSystemProperty("persist.sys.usb.config").lowercase()
-        val usbConfig = getSystemProperty("sys.usb.config").lowercase()
-        val usbState = getSystemProperty("sys.usb.state").lowercase()
+        var persistConfig = getSystemProperty("persist.sys.usb.config").lowercase()
+        var usbConfig = getSystemProperty("sys.usb.config").lowercase()
+        var usbState = getSystemProperty("sys.usb.state").lowercase()
 
-        val checkedSysProp = persistConfig.contains("rndis") || 
+        var checkedSysProp = persistConfig.contains("rndis") || 
                              persistConfig.contains("ncm") || 
                              persistConfig.contains("tethering") ||
                              usbConfig.contains("rndis") || 
@@ -270,6 +284,22 @@ class ScreenStateService : Service() {
                              usbState.contains("ncm") ||
                              usbState.contains("tethering")
 
+        // Root fallback for sysprops (bypasses SELinux restrictions that block reflection on Android 10+)
+        if (!checkedSysProp) {
+            try {
+                val rootProps = com.example.utils.ShellUtils.runCommand("getprop sys.usb.config && getprop sys.usb.state && getprop persist.sys.usb.config", useRoot = true)
+                if (rootProps.isSuccess) {
+                    val rootOutput = rootProps.stdout.lowercase()
+                    if (rootOutput.contains("rndis") || rootOutput.contains("ncm") || rootOutput.contains("tethering")) {
+                        checkedSysProp = true
+                        Log.d(TAG, "isUsbTetheringConfigured: sysprop detected via root Shell")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to check usb properties via root: ${e.message}")
+            }
+        }
+
         var isTetheringActiveByApi = false
         try {
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
@@ -277,9 +307,10 @@ class ScreenStateService : Service() {
                 while (interfaces.hasMoreElements()) {
                     val networkInterface = interfaces.nextElement()
                     val name = networkInterface.name.lowercase()
-                    if (networkInterface.isUp) {
-                        if (name.contains("rndis") || name.contains("usb0") || name.contains("ncm")) {
+                    if (networkInterface.isUp && !networkInterface.isLoopback) {
+                        if (name.contains("rndis") || name.contains("usb") || name.contains("ncm") || name.contains("ecm") || name.contains("tether")) {
                             isTetheringActiveByApi = true
+                            Log.d(TAG, "isUsbTetheringConfigured: API detected active interface $name")
                             break
                         }
                     }
@@ -287,6 +318,22 @@ class ScreenStateService : Service() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to inspect network interfaces via JDK API: ${e.message}")
+        }
+
+        // Root fallback for active interfaces (in case JVM is sandboxed from seeing network interfaces)
+        if (!isTetheringActiveByApi) {
+            try {
+                val ipLink = com.example.utils.ShellUtils.runCommand("ip link show up", useRoot = true)
+                if (ipLink.isSuccess) {
+                    val output = ipLink.stdout.lowercase()
+                    if (output.contains("rndis") || output.contains("usb") || output.contains("ncm") || output.contains("ecm") || output.contains("tether")) {
+                        isTetheringActiveByApi = true
+                        Log.d(TAG, "isUsbTetheringConfigured: root ip link detected active interface")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed ip link fallback: ${e.message}")
+            }
         }
 
         return checkedSysProp || isTetheringActiveByApi
@@ -339,20 +386,34 @@ class ScreenStateService : Service() {
             Log.e(TAG, "Failed to get dynamic USB_STATE: ${e.message}")
         }
 
-        val usbConfig = getSystemProperty("sys.usb.state").lowercase()
-        val usbConfig2 = getSystemProperty("sys.usb.config").lowercase()
-        val isPcHandshake = usbConfig.contains("mtp") || 
-                            usbConfig.contains("adb") || 
-                            usbConfig.contains("rndis") || 
-                            usbConfig.contains("ptp") ||
-                            usbConfig.contains("ncm") ||
-                            usbConfig2.contains("mtp") || 
-                            usbConfig2.contains("adb") || 
-                            usbConfig2.contains("rndis") || 
-                            usbConfig2.contains("ptp") ||
-                            usbConfig2.contains("ncm")
+        var usbState = getSystemProperty("sys.usb.state").lowercase()
+        var isPcHandshake = false
+        
+        // Root fallback to check physical USB state instead of just properties which can lie on wall charger
+        try {
+            val rootState = com.example.utils.ShellUtils.runCommand("cat /sys/class/android_usb/android0/state", useRoot = true)
+            if (rootState.isSuccess) {
+                val state = rootState.stdout.trim().uppercase()
+                if (state == "CONFIGURED" || state == "CONNECTED") {
+                    isPcHandshake = true
+                    Log.d(TAG, "isUsbConnectedToComputer: /sys/class/android_usb state is $state")
+                }
+            } else {
+                // If /sys/class/android_usb doesn't exist (modern devices), check dumpsys usb
+                val dumpsysUsb = com.example.utils.ShellUtils.runCommand("dumpsys usb | grep 'Connected:'", useRoot = true)
+                if (dumpsysUsb.isSuccess && dumpsysUsb.stdout.contains("Connected: true", ignoreCase = true)) {
+                     isPcHandshake = true
+                     Log.d(TAG, "isUsbConnectedToComputer: dumpsys usb confirmed connected")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check low-level usb state: ${e.message}")
+        }
 
-        Log.d(TAG, "USB computer connection state check detail: activeUsb=$isUsbActive, config1=$usbConfig, config2=$usbConfig2, isPcHandshake=$isPcHandshake")
+        // If root fallback failed/didn't run, trust the sticky Intent's 'connected' extra 
+        // We DO NOT trust sys.usb.config or sys.usb.state as they can persist when plugged into a wall charger
+        
+        Log.d(TAG, "USB computer connection check: activeUsbIntent=$isUsbActive, rootPcHandshake=$isPcHandshake, sysUsbState=$usbState")
         
         return isUsbActive || isPcHandshake
     }
@@ -545,16 +606,16 @@ class ScreenStateService : Service() {
 
         Thread {
             try {
-                val isMobileDataOn = ControlManager.isMobileDataEnabled(context)
-                if (isMobileDataOn) {
-                    val plugged = getBatteryPluggedState(context)
-                    val isUsbPowered = (plugged == android.os.BatteryManager.BATTERY_PLUGGED_USB) || isUsbConnectedToComputer(context)
-                    val targetMode = if (isUsbPowered) "5G" else "4G"
-                    Log.i(TAG, "checkAndApplyUsb5gAdjustment: Mobile data is ON. plugged=$plugged, isUsbPowered=$isUsbPowered -> Setting preferred network to $targetMode")
-                    ControlManager.setPreferredNetworkType(context, targetMode)
-                } else {
-                    Log.d(TAG, "checkAndApplyUsb5gAdjustment: Mobile data is OFF, skipping network mode change.")
-                }
+                // Wait briefly for state settling
+                Thread.sleep(500)
+                
+                val plugged = getBatteryPluggedState(context)
+                // Treat any external plugged state != 0 as USB powered (since AC chargers are also USB)
+                val isUsbPowered = (plugged != 0) || isUsbConnectedToComputer(context)
+                val targetMode = if (isUsbPowered) "5G" else "4G"
+                
+                Log.i(TAG, "checkAndApplyUsb5gAdjustment: plugged=$plugged, isUsbPowered=$isUsbPowered -> Setting preferred network to $targetMode")
+                ControlManager.setPreferredNetworkType(context, targetMode)
             } catch (e: Exception) {
                 Log.e(TAG, "Error adjusting USB 5G network mode: ${e.message}")
             }
