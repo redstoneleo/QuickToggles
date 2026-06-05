@@ -446,6 +446,7 @@ object ControlManager {
         // 9  = LTE_GSM_WCDMA (4G Auto)
         // 22 = LTE_TDSCDMA_CDMA_EVDO_GSM_WCDMA (4G Global/China)
         val targetValStr1 = if (actualMode == "5G") "33" else "22"
+        val targetValStr2 = if (actualMode == "5G") "26" else "9"
         val is5G = if (actualMode == "5G") "1" else "0"
         
         val commands = mutableListOf<String>()
@@ -474,12 +475,14 @@ object ControlManager {
             val slotIndex = sim.slotIndex
             Log.d(TAG, "Setting preferred network mode $actualMode for SubId: $subId, Slot: $slotIndex")
             
-            // Try standard AOSP command with the target network type
+            // Try standard AOSP command with 33, then fallback to 26 for 5G
             commands.add("cmd phone set-preferred-network-type $subId $targetValStr1")
-
+            commands.add("cmd phone set-preferred-network-type $subId $targetValStr2")
+            
             // On some Custom ROMs (e.g. LineageOS patches), set-preferred-network-type expects the slot index (0 or 1)
             if (slotIndex != subId && slotIndex >= 0) {
                 commands.add("cmd phone set-preferred-network-type $slotIndex $targetValStr1")
+                commands.add("cmd phone set-preferred-network-type $slotIndex $targetValStr2")
             }
             
             // Settings DB tables
@@ -492,6 +495,7 @@ object ControlManager {
         if (sims.isEmpty()) {
             for (fallbackSubId in 0..2) {
                 commands.add("cmd phone set-preferred-network-type $fallbackSubId $targetValStr1")
+                commands.add("cmd phone set-preferred-network-type $fallbackSubId $targetValStr2")
                 commands.add("settings put global preferred_network_mode_$fallbackSubId $targetValStr1")
             }
         }

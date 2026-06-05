@@ -27,7 +27,6 @@ class QuickControlWidget : AppWidgetProvider() {
         const val ACTION_TOGGLE_GPS = "com.example.widget.ACTION_TOGGLE_GPS"
         const val ACTION_TOGGLE_FLASH = "com.example.widget.ACTION_TOGGLE_FLASH"
         const val ACTION_REFRESH_WIDGET = "com.example.widget.ACTION_REFRESH_WIDGET"
-        const val ACTION_USB_5G_DATA_CHANGED = "com.example.widget.ACTION_USB_5G_DATA_CHANGED"
 
         fun updateAppWidget(
             context: Context,
@@ -91,19 +90,6 @@ class QuickControlWidget : AppWidgetProvider() {
         }
     }
 
-    private fun notifyUsb5gAdjustment(context: Context) {
-        if (PrefsManager.isUsb5gToggleEnabled(context)) {
-            val intent = Intent(context, com.example.service.ScreenStateService::class.java).apply {
-                action = ACTION_USB_5G_DATA_CHANGED
-            }
-            try {
-                context.startService(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to notify ScreenStateService for 5G adjustment: ${e.message}")
-            }
-        }
-    }
-
     override fun onUpdate(
         context: Context,
         appWidgetManager: AppWidgetManager,
@@ -126,8 +112,6 @@ class QuickControlWidget : AppWidgetProvider() {
                 ACTION_TOGGLE_DATA -> {
                     val current = ControlManager.isMobileDataEnabled(context)
                     ControlManager.setMobileDataEnabled(context, !current)
-                    // Trigger 5G/4G adjustment after data toggle if USB 5G feature is enabled
-                    notifyUsb5gAdjustment(context)
                 }
                 ACTION_TOGGLE_WIFI -> {
                     val current = ControlManager.isWifiEnabled(context)
