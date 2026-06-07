@@ -448,95 +448,119 @@ object ControlManager {
         val stateStr = if (enable) "true" else "false"
         val stateInt = if (enable) "1" else "0"
         
-        // standard AOSP parseBoolean requires "true"/"false", but some ROMs might have custom implementations
-        val cmd1 = "cmd phone set-subscription-enabled $subId $stateStr"
-        val cmd2 = "cmd phone set-subscription-enabled $subId $stateInt"
-        
         val isBadResult = fun(r: ShellUtils.CommandResult): Boolean {
             val combined = r.stdout + " " + r.stderr
-            return !r.isSuccess || combined.contains("Exception", ignoreCase = true) || 
-                   combined.contains("Error", ignoreCase = true) || combined.contains("bad ", ignoreCase = true) || 
-                   combined.contains("Unknown", ignoreCase = true) || combined.contains("usage:", ignoreCase = true) ||
-                   combined.contains("not found", ignoreCase = true)
+            if (!r.isSuccess) return true
+            val combinedLower = combined.lowercase()
+            return combinedLower.contains("exception") || 
+                   combinedLower.contains("error") || 
+                   combinedLower.contains("bad ") || 
+                   combinedLower.contains("unknown") || 
+                   combinedLower.contains("usage:") ||
+                   combinedLower.contains("not found") ||
+                   combinedLower.contains("cmd: can't find service:")
         }
 
-        var result = ShellUtils.runCommand(cmd1, useRoot = true)
-        var errorAcc = result.stderr + "|" + result.stdout
+        var errorAcc = ""
+        var result = ShellUtils.CommandResult(-1, "", "")
+        var isRealSuccess = false
+
+        val commandsToTry = listOf(
+            "cmd phone set-subscription-enabled $subId $stateStr",
+            "cmd phone set-subscription-enabled $subId $stateInt",
+            "cmd phone set-uicc-applications-enabled $subId $stateStr",
+            "cmd phone set-uicc-applications-enabled $subId $stateInt",
+            "cmd phone uicc-applications-enable $subId $stateStr",
+            "cmd phone uicc-applications-enable $subId $stateInt",
+            "cmd phone enable-subscription $subId $stateStr",
+            "cmd phone enable-subscription $subId $stateInt",
+            "cmd phone subinfo-set-active $subId $stateStr",
+            "cmd phone subinfo-set-active $subId $stateInt",
+            // content call
+            "content call --uri content://telephony/siminfo --method setUiccApplicationsEnabled --extra subId:i:$subId --extra enable:b:$stateStr"
+        )
         
-        if (isBadResult(result)) {
-           val result2 = ShellUtils.runCommand(cmd2, useRoot = true)
-           if (!isBadResult(result2)) {
-               result = result2
-               errorAcc += "\n[cmd2]: Success"
-           } else {
-               errorAcc += " // " + result2.stderr + "|" + result2.stdout
-               
-               // Dump all columns of siminfo to know what we have
-               val allColsCmd = ShellUtils.runCommand("content query --uri content://telephony/siminfo", useRoot = true)
-               errorAcc += "\n[Columns]: " + allColsCmd.stdout.split('\n').firstOrNull()
+        for (cmd in commandsToTry) {
+            val r = ShellUtils.runCommand(cmd, useRoot = true)
+            if (!isBadResult(r)) {
+                errorAcc += "\n[SUCCESS] $cmd"
+                result = r
+                isRealSuccess = true
+                break
+            } else {
+                errorAcc += "\n[FAIL] $cmd => " + (r.stdout.trim() + " " + r.stderr.trim()).take(100)
+            }
+        }
 
-               // Try Java API using reflection inside the app process (usually fails due to MODIFY_PHONE_STATE signature protection)
-               try {
-                   val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
-                   var javaSuccess = false
-                   try {
-                       val method1 = sm.javaClass.getMethod("setUiccApplicationsEnabled", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-                       method1.invoke(sm, subId, enable)
-                       javaSuccess = true
-                       errorAcc += "\n[API 1]: setUiccApplicationsEnabled Success!"
-                   } catch (e1: Exception) {
-                       errorAcc += "\n[API 1 Error]: ${e1.cause?.message ?: e1.message}"
-                       try {
-                           val method2 = sm.javaClass.getMethod("setSubscriptionEnabled", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-                           method2.invoke(sm, subId, enable)
-                           javaSuccess = true
-                           errorAcc += "\n[API 2]: setSubscriptionEnabled Success!"
-                       } catch (e2: Exception) {
-                           errorAcc += "\n[API 2 Error]: ${e2.cause?.message ?: e2.message}"
-                       }
-                   }
-                   if (javaSuccess) {
-                       result = ShellUtils.CommandResult(0, "Java API success", "")
-                   }
-               } catch (ex: Exception) {
-                   errorAcc += "\n[Java API Exception]: ${ex.message}"
-               }
+        if (!isRealSuccess) {
+            // Try app_process root java api
+            val apkPath = context.applicationInfo.sourceDir
+            val className = "com.example.utils.RootSimTool"
+            val appProcessCmd = "export CLASSPATH=$apkPath && app_process /system/bin $className $subId $enable"
+            
+            val r = ShellUtils.runCommand(appProcessCmd, useRoot = true)
+            val output = r.stdout.trim() + " " + r.stderr.trim()
+            if (output.contains("SUCCESS_ROOT_API")) {
+                errorAcc += "\n[app_process SUCCESS] Root API execution succeeded"
+                isRealSuccess = true
+            } else {
+                errorAcc += "\n[app_process FAIL] => ${output.take(300)}"
+            }
+        }
 
-               if (isBadResult(result)) {
-                   // Fallback logic for content provider (often not working due to missing columns or read-only, but let's try AOSP & MTK columns)
-                   val columnsToTry = listOf("uicc_applications_enabled", "sub_state", "sim_status")
-                   var contentSuccess = false
-                   for (col in columnsToTry) {
-                       val contentCmd = "content update --uri content://telephony/siminfo --bind $col:i:$stateInt --where \"_id=$subId\""
-                       val result3 = ShellUtils.runCommand(contentCmd, useRoot = true)
-                       if (result3.isSuccess && !result3.stderr.contains("Exception") && !result3.stderr.contains("no such column") && !result3.stdout.contains("usage:")) {
-                           errorAcc += "\n[Content Update]: Success with column $col"
-                           contentSuccess = true
-                           break
-                       } else {
-                           errorAcc += "\n[Content Update $col Error]: " + result3.stderr.trim() + " " + result3.stdout.trim()
-                       }
-                   }
-                   
-                   if (contentSuccess) {
-                       ShellUtils.runCommand("am broadcast -a android.intent.action.ACTION_SUBINFO_RECORD_UPDATED", useRoot = true)
-                       result = ShellUtils.CommandResult(0, "Content provider success", "")
-                   } else {
-                       // Grab full help info for debugging if all failed
-                       val phoneHelp = ShellUtils.runCommand("cmd phone", useRoot = true).stdout.take(800)
-                       errorAcc += "\n===========\n[Phone Help]:\n$phoneHelp"
-                   }
-               }
-           }
+        if (!isRealSuccess) {
+            // Try fallback Java API via Context just in case (usually fails due to MODIFY_PHONE_STATE)
+            try {
+                val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
+                val methodsToTry = listOf("setUiccApplicationsEnabled", "setSubscriptionEnabled")
+                for (mName in methodsToTry) {
+                    try {
+                        val method = sm.javaClass.getMethod(mName, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+                        method.invoke(sm, subId, enable)
+                        isRealSuccess = true
+                        result = ShellUtils.CommandResult(0, "Java API success", "")
+                        errorAcc += "\n[API SUCCESS] $mName"
+                        break
+                    } catch (e: Exception) {
+                        errorAcc += "\n[API FAIL] $mName => ${e.cause?.message ?: e.message}"
+                    }
+                }
+            } catch (ex: Exception) {
+                errorAcc += "\n[API Exception] => ${ex.message}"
+            }
+        }
+
+        if (!isRealSuccess) {
+            // content update
+             val columnsToTry = listOf("uicc_applications_enabled", "sub_state", "sim_status", "is_active")
+             for (col in columnsToTry) {
+                 val contentCmd = "content update --uri content://telephony/siminfo --bind $col:i:$stateInt --where \"_id=$subId\""
+                 val r = ShellUtils.runCommand(contentCmd, useRoot = true)
+                 if (!isBadResult(r) && !r.stderr.contains("no such column")) {
+                     errorAcc += "\n[Content Update warning] Success with $col, but this may NOT actually enable the hardware SIM."
+                     ShellUtils.runCommand("am broadcast -a android.intent.action.ACTION_SUBINFO_RECORD_UPDATED", useRoot = true)
+                     // NOT setting isRealSuccess=true because content update doesn't activate radio
+                     break
+                 } else {
+                     errorAcc += "\n[Content Update FAIL] $col => " + (r.stdout.trim() + " " + r.stderr.trim()).take(60)
+                 }
+             }
+             
+             // Grab phone help for debugging
+             val phoneHelp = ShellUtils.runCommand("cmd phone", useRoot = true).stdout.take(800)
+             errorAcc += "\n\n[Phone Help Dump]:\n$phoneHelp"
+             
+             val isubHelp = ShellUtils.runCommand("cmd isub", useRoot = true).stdout.take(200)
+             errorAcc += "\n\n[Isub Help Dump]:\n$isubHelp"
         }
         
-        if (!isBadResult(result)) {
+        lastSetSubscriptionError = errorAcc
+        
+        if (isRealSuccess) {
             Log.i(TAG, "Shell cmd phone set-subscription-enabled $subId succeeded")
-            lastSetSubscriptionError = errorAcc
             return true
         } else {
-            Log.e(TAG, "Shell command failed for setSubscriptionEnabled: ${result.stderr} / ${result.stdout}")
-            lastSetSubscriptionError = errorAcc // Keep full log for copying
+            Log.e(TAG, "Shell command failed for setSubscriptionEnabled: $errorAcc")
             return false
         }
     }
