@@ -138,6 +138,8 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     var usb5gToggle by remember { mutableStateOf(PrefsManager.isUsb5gToggleEnabled(context)) }
     var activeColorHex by remember { mutableStateOf(PrefsManager.getActiveColor(context)) }
     var inactiveColorHex by remember { mutableStateOf(PrefsManager.getInactiveColor(context)) }
+    
+    var simDebugLog by remember { mutableStateOf("") }
 
     fun refreshSimList() {
         coroutineScope.launch(Dispatchers.IO) {
@@ -916,8 +918,19 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                             }
                         }
                     } else {
-                        val secondarySim = simCardList.firstOrNull { it.slotIndex > 0 }
-                        val mainSim = simCardList.firstOrNull { it.slotIndex == 0 }
+                        val defaultDataSubId = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                            android.telephony.SubscriptionManager.getDefaultDataSubscriptionId()
+                        } else {
+                            -1
+                        }
+
+                        val mainSim = if (defaultDataSubId != -1) {
+                            simCardList.firstOrNull { it.subId == defaultDataSubId } ?: simCardList.firstOrNull { it.slotIndex == 0 }
+                        } else {
+                            simCardList.firstOrNull { it.slotIndex == 0 }
+                        }
+
+                        val secondarySim = simCardList.firstOrNull { it != mainSim }
 
                         Column(
                             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -1011,13 +1024,16 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                                         toggleLoading = false
                                                         refreshSimList()
                                                         if (success) {
+                                                            simDebugLog = "成功:\n" + ControlManager.lastSetSubscriptionError // Show debug logic even when successful
                                                             if (checked) {
                                                                 Toast.makeText(context, "副卡 ${secondarySim.displayName} 已开启，默认拨号/短信已配置为系统级主动质询询问机制！", Toast.LENGTH_LONG).show()
                                                             } else {
                                                                 Toast.makeText(context, "副卡 ${secondarySim.displayName} 已成功休眠关闭！", Toast.LENGTH_SHORT).show()
                                                             }
                                                         } else {
-                                                            Toast.makeText(context, "切换状态失败，请确认是否授予 Root/Shell 级配置权限。", Toast.LENGTH_LONG).show()
+                                                            val errMsg = ControlManager.lastSetSubscriptionError
+                                                            simDebugLog = "失败:\n$errMsg"
+                                                            Toast.makeText(context, "切换状态失败，请查看页面底部详细信息", Toast.LENGTH_LONG).show()
                                                         }
                                                     }
                                                 }
@@ -1231,6 +1247,59 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                         fontSize = 12.sp,
                         lineHeight = 18.sp
                     )
+                }
+            }
+        }
+
+        // 7. Debug Log for SIM Switching
+        if (simDebugLog.isNotEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xFFFFF0F0))
+                        .border(BorderStroke(1.dp, Color(0xFFFFB4AB)), RoundedCornerShape(24.dp))
+                        .padding(20.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = "🛠️ Shell 控制日志",
+                            color = Color(0xFFBA1A1A),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = simDebugLog,
+                            color = Color(0xFFBA1A1A),
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    val clip = android.content.ClipData.newPlainText("Sim Log", simDebugLog)
+                                    clipboard.setPrimaryClip(clip)
+                                    Toast.makeText(context, "已复制完整日志到剪贴板", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBA1A1A)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("复制完整的日志", color = Color.White, fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = { simDebugLog = "" },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBA1A1A)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("清除日志", color = Color.White, fontSize = 12.sp)
+                            }
+                        }
+                    }
                 }
             }
         }

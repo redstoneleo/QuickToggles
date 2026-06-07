@@ -326,30 +326,47 @@ object ControlManager {
             }
 
             for (info in allList) {
-                if (info.simSlotIndex in 0..1 && info.subscriptionId !in processedSubIds) {
-                    list.add(
-                        SimInfo(
-                            subId = info.subscriptionId,
-                            slotIndex = info.simSlotIndex,
-                            displayName = info.displayName?.toString() ?: "SIM ${info.simSlotIndex + 1}",
-                            isActive = false,
-                            isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.isEmbedded else false,
-                            number = info.number ?: ""
+                if (info.subscriptionId !in processedSubIds) {
+                    val finalSlotIndex = if (info.simSlotIndex >= 0) info.simSlotIndex else {
+                        if (list.any { it.slotIndex == 0 }) 1 else 0
+                    }
+                    if (finalSlotIndex in 0..1) {
+                        list.add(
+                            SimInfo(
+                                subId = info.subscriptionId,
+                                slotIndex = finalSlotIndex,
+                                displayName = info.displayName?.toString() ?: "SIM ${finalSlotIndex + 1}",
+                                isActive = false,
+                                isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.isEmbedded else false,
+                                number = info.number ?: ""
+                            )
                         )
-                    )
+                        processedSubIds.add(info.subscriptionId)
+                    }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch getSimCardList: ${e.message}")
         }
 
-        // --- ROOT FALLBACK IF APIS RETURN EMPTY ---
-        if (list.isEmpty()) {
-            Log.i(TAG, "Standard subscriptionManager API returned empty, attempting Root Content Provider query fallback...")
+        // --- ROOT FALLBACK TO AUGMENT APIS ---
+        if (list.size < 2) {
+            Log.i(TAG, "Standard API found < 2 SIMs, attempting Root Content Provider query fallback...")
             try {
                 val rootResult = ShellUtils.runCommand("content query --uri content://telephony/siminfo", useRoot = true)
                 if (rootResult.isSuccess && rootResult.stdout.isNotEmpty()) {
                     val lines = rootResult.stdout.split("\n")
+                    
+                    data class RootSimRecord(
+                        val subId: Int,
+                        val slotIndex: Int,
+                        val displayName: String,
+                        val number: String,
+                        val isActiveRoot: Boolean
+                    )
+                    
+                    val rootSims = mutableListOf<RootSimRecord>()
+                    
                     for (line in lines) {
                         val trimmedLine = line.trim()
                         if (trimmedLine.startsWith("Row:")) {
@@ -358,6 +375,7 @@ object ControlManager {
                             var slotIndex = -1
                             var displayName = ""
                             var number = ""
+                            var isActiveRoot = false
                             
                             for (part in parts) {
                                 val trimmedPart = part.trim()
@@ -378,24 +396,39 @@ object ControlManager {
                                     }
                                     "display_name" -> displayName = value
                                     "number" -> number = value
+                                    "is_active" -> isActiveRoot = value == "1" || value.equals("true", ignoreCase = true)
                                 }
                             }
                             
-                            if (subId != -1) { // We don't care if slotIndex is strictly 0 or 1, we want all subIds!
-                                val isActive = true
-                                val finalSlotIndex = if (slotIndex >= 0) slotIndex else 0 // Default to 0
-                                if (list.none { it.subId == subId }) {
-                                    list.add(
-                                        SimInfo(
-                                            subId = subId,
-                                            slotIndex = finalSlotIndex,
-                                            displayName = if (displayName.isNotEmpty()) displayName else "SIM (Sub $subId)",
-                                            isActive = isActive,
-                                            isEmbedded = false,
-                                            number = number
-                                        )
+                            if (subId != -1) {
+                                rootSims.add(RootSimRecord(subId, slotIndex, displayName, number, isActiveRoot))
+                            }
+                        }
+                    }
+                    
+                    // Sort descending by subId to prioritize newer SIM insertions if slotIndex implies unassigned or history
+                    rootSims.sortByDescending { it.subId }
+                    
+                    for (record in rootSims) {
+                        if (list.size >= 2) break // Allow max 2 SIMs
+                        
+                        if (list.none { it.subId == record.subId }) {
+                            val finalSlotIndex = if (record.slotIndex >= 0) record.slotIndex else {
+                                if (list.any { it.slotIndex == 0 }) 1 else 0
+                            }
+                            
+                            // Only add if we don't already have a SIM in this guessed slot, or force it strictly if needed
+                            if (list.none { it.slotIndex == finalSlotIndex }) {
+                                list.add(
+                                    SimInfo(
+                                        subId = record.subId,
+                                        slotIndex = finalSlotIndex,
+                                        displayName = if (record.displayName.isNotEmpty()) record.displayName else "SIM (Sub ${record.subId})",
+                                        isActive = record.isActiveRoot,
+                                        isEmbedded = false,
+                                        number = record.number
                                     )
-                                }
+                                )
                             }
                         }
                     }
@@ -409,16 +442,101 @@ object ControlManager {
         return list
     }
 
+    var lastSetSubscriptionError = ""
+
     fun setSubscriptionEnabled(context: Context, subId: Int, enable: Boolean): Boolean {
-        val state = if (enable) "1" else "0"
-        val cmd = "cmd phone set-subscription-enabled $subId $state"
-        val result = ShellUtils.runCommand(cmd, useRoot = true)
+        val stateStr = if (enable) "true" else "false"
+        val stateInt = if (enable) "1" else "0"
         
-        if (result.isSuccess) {
-            Log.i(TAG, "Shell cmd phone set-subscription-enabled $subId $state succeeded")
+        // standard AOSP parseBoolean requires "true"/"false", but some ROMs might have custom implementations
+        val cmd1 = "cmd phone set-subscription-enabled $subId $stateStr"
+        val cmd2 = "cmd phone set-subscription-enabled $subId $stateInt"
+        
+        val isBadResult = fun(r: ShellUtils.CommandResult): Boolean {
+            val combined = r.stdout + " " + r.stderr
+            return !r.isSuccess || combined.contains("Exception", ignoreCase = true) || 
+                   combined.contains("Error", ignoreCase = true) || combined.contains("bad ", ignoreCase = true) || 
+                   combined.contains("Unknown", ignoreCase = true) || combined.contains("usage:", ignoreCase = true) ||
+                   combined.contains("not found", ignoreCase = true)
+        }
+
+        var result = ShellUtils.runCommand(cmd1, useRoot = true)
+        var errorAcc = result.stderr + "|" + result.stdout
+        
+        if (isBadResult(result)) {
+           val result2 = ShellUtils.runCommand(cmd2, useRoot = true)
+           if (!isBadResult(result2)) {
+               result = result2
+               errorAcc += "\n[cmd2]: Success"
+           } else {
+               errorAcc += " // " + result2.stderr + "|" + result2.stdout
+               
+               // Dump all columns of siminfo to know what we have
+               val allColsCmd = ShellUtils.runCommand("content query --uri content://telephony/siminfo", useRoot = true)
+               errorAcc += "\n[Columns]: " + allColsCmd.stdout.split('\n').firstOrNull()
+
+               // Try Java API using reflection inside the app process (usually fails due to MODIFY_PHONE_STATE signature protection)
+               try {
+                   val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
+                   var javaSuccess = false
+                   try {
+                       val method1 = sm.javaClass.getMethod("setUiccApplicationsEnabled", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+                       method1.invoke(sm, subId, enable)
+                       javaSuccess = true
+                       errorAcc += "\n[API 1]: setUiccApplicationsEnabled Success!"
+                   } catch (e1: Exception) {
+                       errorAcc += "\n[API 1 Error]: ${e1.cause?.message ?: e1.message}"
+                       try {
+                           val method2 = sm.javaClass.getMethod("setSubscriptionEnabled", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+                           method2.invoke(sm, subId, enable)
+                           javaSuccess = true
+                           errorAcc += "\n[API 2]: setSubscriptionEnabled Success!"
+                       } catch (e2: Exception) {
+                           errorAcc += "\n[API 2 Error]: ${e2.cause?.message ?: e2.message}"
+                       }
+                   }
+                   if (javaSuccess) {
+                       result = ShellUtils.CommandResult(0, "Java API success", "")
+                   }
+               } catch (ex: Exception) {
+                   errorAcc += "\n[Java API Exception]: ${ex.message}"
+               }
+
+               if (isBadResult(result)) {
+                   // Fallback logic for content provider (often not working due to missing columns or read-only, but let's try AOSP & MTK columns)
+                   val columnsToTry = listOf("uicc_applications_enabled", "sub_state", "sim_status")
+                   var contentSuccess = false
+                   for (col in columnsToTry) {
+                       val contentCmd = "content update --uri content://telephony/siminfo --bind $col:i:$stateInt --where \"_id=$subId\""
+                       val result3 = ShellUtils.runCommand(contentCmd, useRoot = true)
+                       if (result3.isSuccess && !result3.stderr.contains("Exception") && !result3.stderr.contains("no such column") && !result3.stdout.contains("usage:")) {
+                           errorAcc += "\n[Content Update]: Success with column $col"
+                           contentSuccess = true
+                           break
+                       } else {
+                           errorAcc += "\n[Content Update $col Error]: " + result3.stderr.trim() + " " + result3.stdout.trim()
+                       }
+                   }
+                   
+                   if (contentSuccess) {
+                       ShellUtils.runCommand("am broadcast -a android.intent.action.ACTION_SUBINFO_RECORD_UPDATED", useRoot = true)
+                       result = ShellUtils.CommandResult(0, "Content provider success", "")
+                   } else {
+                       // Grab full help info for debugging if all failed
+                       val phoneHelp = ShellUtils.runCommand("cmd phone", useRoot = true).stdout.take(800)
+                       errorAcc += "\n===========\n[Phone Help]:\n$phoneHelp"
+                   }
+               }
+           }
+        }
+        
+        if (!isBadResult(result)) {
+            Log.i(TAG, "Shell cmd phone set-subscription-enabled $subId succeeded")
+            lastSetSubscriptionError = errorAcc
             return true
         } else {
-            Log.e(TAG, "Shell command failed for setSubscriptionEnabled: ${result.stderr}")
+            Log.e(TAG, "Shell command failed for setSubscriptionEnabled: ${result.stderr} / ${result.stdout}")
+            lastSetSubscriptionError = errorAcc // Keep full log for copying
             return false
         }
     }
@@ -474,9 +592,9 @@ object ControlManager {
             val slotIndex = sim.slotIndex
             Log.d(TAG, "Setting preferred network mode $actualMode for SubId: $subId, Slot: $slotIndex")
             
-            // Try standard AOSP command with the target network type
+            // Try standard AOSP command with 33
             commands.add("cmd phone set-preferred-network-type $subId $targetValStr1")
-
+            
             // On some Custom ROMs (e.g. LineageOS patches), set-preferred-network-type expects the slot index (0 or 1)
             if (slotIndex != subId && slotIndex >= 0) {
                 commands.add("cmd phone set-preferred-network-type $slotIndex $targetValStr1")
