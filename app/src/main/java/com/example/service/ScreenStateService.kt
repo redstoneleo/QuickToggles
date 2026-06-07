@@ -618,10 +618,14 @@ class ScreenStateService : Service() {
                     val isDataOn = ControlManager.isMobileDataEnabled(context)
                     val targetMode = if (isUsbPowered && isDataOn) "5G" else "4G"
                     
-                    Log.i(TAG, "checkAndApplyUsb5gAdjustment: plugged=$plugged, isUsbPowered=$isUsbPowered, isDataOn=$isDataOn -> Setting preferred network to $targetMode")
+                    val msg = "ScreenStateService checkAndApplyUsb5gAdjustment: plugged=$plugged, isUsbPowered=$isUsbPowered, isDataOn=$isDataOn -> Setting preferred network to $targetMode"
+                    Log.i(TAG, msg)
+                    ControlManager.addShellLog(msg)
                     ControlManager.setPreferredNetworkType(context, targetMode)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error adjusting USB 5G network mode: ${e.message}")
+                    val errMsg = "Error adjusting USB 5G network mode: ${e.message}"
+                    Log.e(TAG, errMsg)
+                    ControlManager.addShellLog(errMsg)
                 }
             }.start()
         }

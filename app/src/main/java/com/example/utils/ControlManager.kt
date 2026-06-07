@@ -22,7 +22,17 @@ data class SimInfo(
 object ControlManager {
     private const val TAG = "ControlManager"
     
-    // Memory state for flashlight to sync updates
+    // Logs for UI consumption
+    val shellLogFlow = kotlinx.coroutines.flow.MutableStateFlow("")
+
+    fun addShellLog(msg: String) {
+        android.util.Log.i(TAG, msg)
+        val timeNow = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
+        val current = shellLogFlow.value
+        val newLog = "[$timeNow] $msg\n$current"
+        shellLogFlow.value = newLog.take(50000)
+    }
+
     private var isTorchOn = false
 
     // Initialize torch listener to monitor physical state changes as well
@@ -464,47 +474,59 @@ object ControlManager {
         var errorAcc = ""
         var result = ShellUtils.CommandResult(-1, "", "")
         var isRealSuccess = false
-
-        val commandsToTry = listOf(
-            "cmd phone set-subscription-enabled $subId $stateStr",
-            "cmd phone set-subscription-enabled $subId $stateInt",
-            "cmd phone set-uicc-applications-enabled $subId $stateStr",
-            "cmd phone set-uicc-applications-enabled $subId $stateInt",
-            "cmd phone uicc-applications-enable $subId $stateStr",
-            "cmd phone uicc-applications-enable $subId $stateInt",
-            "cmd phone enable-subscription $subId $stateStr",
-            "cmd phone enable-subscription $subId $stateInt",
-            "cmd phone subinfo-set-active $subId $stateStr",
-            "cmd phone subinfo-set-active $subId $stateInt",
-            // content call
-            "content call --uri content://telephony/siminfo --method setUiccApplicationsEnabled --extra subId:i:$subId --extra enable:b:$stateStr"
-        )
         
-        for (cmd in commandsToTry) {
-            val r = ShellUtils.runCommand(cmd, useRoot = true)
-            if (!isBadResult(r)) {
-                errorAcc += "\n[SUCCESS] $cmd"
-                result = r
-                isRealSuccess = true
-                break
-            } else {
-                errorAcc += "\n[FAIL] $cmd => " + (r.stdout.trim() + " " + r.stderr.trim()).take(100)
+        var remainingSubId = -1
+        if (!enable) {
+            val list = getSimCardList(context)
+            val activeSims = list.filter { it.isActive && it.subId != subId }
+            if (activeSims.size == 1) {
+                remainingSubId = activeSims[0].subId
             }
         }
 
+        // 1. Try app_process root java api
+        val apkPath = context.applicationInfo.sourceDir
+        val className = "com.example.utils.RootSimTool"
+        val appProcessCmd = "export CLASSPATH=$apkPath && app_process /system/bin $className $subId $enable $remainingSubId"
+        
+        val rAppProcess = ShellUtils.runCommand(appProcessCmd, useRoot = true)
+        val outputProcess = rAppProcess.stdout.trim() + " " + rAppProcess.stderr.trim()
+        if (outputProcess.contains("SUCCESS_ROOT_API")) {
+            errorAcc += "\n[app_process SUCCESS] Root API execution succeeded"
+            result = rAppProcess
+            isRealSuccess = true
+        } else {
+            errorAcc += "\n[app_process FAIL] => ${outputProcess.take(300)}"
+        }
+
+        // 2. Try the different cmd phone commands if app_process failed
         if (!isRealSuccess) {
-            // Try app_process root java api
-            val apkPath = context.applicationInfo.sourceDir
-            val className = "com.example.utils.RootSimTool"
-            val appProcessCmd = "export CLASSPATH=$apkPath && app_process /system/bin $className $subId $enable"
+            val commandsToTry = listOf(
+                "cmd phone set-subscription-enabled $subId $stateStr",
+                "cmd phone set-subscription-enabled $subId $stateInt",
+                "cmd phone set-uicc-applications-enabled $subId $stateStr",
+                "cmd phone set-uicc-applications-enabled $subId $stateInt",
+                "cmd phone uicc-applications-enable $subId $stateStr",
+                "cmd phone uicc-applications-enable $subId $stateInt",
+                "cmd phone enable-subscription $subId $stateStr",
+                "cmd phone enable-subscription $subId $stateInt",
+                "cmd phone subinfo-set-active $subId $stateStr",
+                "cmd phone subinfo-set-active $subId $stateInt",
+                // content call
+                "content call --uri content://telephony/siminfo --method setUiccApplicationsEnabled --extra subId:i:$subId --extra enable:b:$stateStr",
+                "content call --uri content://telephony/siminfo --method setSubscriptionEnabled --extra subId:i:$subId --extra enable:b:$stateStr"
+            )
             
-            val r = ShellUtils.runCommand(appProcessCmd, useRoot = true)
-            val output = r.stdout.trim() + " " + r.stderr.trim()
-            if (output.contains("SUCCESS_ROOT_API")) {
-                errorAcc += "\n[app_process SUCCESS] Root API execution succeeded"
-                isRealSuccess = true
-            } else {
-                errorAcc += "\n[app_process FAIL] => ${output.take(300)}"
+            for (cmd in commandsToTry) {
+                val r = ShellUtils.runCommand(cmd, useRoot = true)
+                if (!isBadResult(r)) {
+                    errorAcc += "\n[SUCCESS] $cmd"
+                    result = r
+                    isRealSuccess = true
+                    break
+                } else {
+                    errorAcc += "\n[FAIL] $cmd => " + (r.stdout.trim() + " " + r.stderr.trim()).take(100)
+                }
             }
         }
 
@@ -555,9 +577,20 @@ object ControlManager {
         }
         
         lastSetSubscriptionError = errorAcc
+        addShellLog("\n--- setSubscriptionEnabled($subId, $enable) ---$errorAcc")
         
         if (isRealSuccess) {
             Log.i(TAG, "Shell cmd phone set-subscription-enabled $subId succeeded")
+            
+            // Set voice/sms defaults to "Ask every time" (-1)
+            ShellUtils.runCommand("settings put global multi_sim_voice_call -1", useRoot = true)
+            ShellUtils.runCommand("settings put global multi_sim_sms -1", useRoot = true)
+
+            // If we have a single remaining active SIM, set it as default data to prevent system dialog
+            if (remainingSubId != -1) {
+                ShellUtils.runCommand("settings put global multi_sim_data_call $remainingSubId", useRoot = true)
+            }
+            
             return true
         } else {
             Log.e(TAG, "Shell command failed for setSubscriptionEnabled: $errorAcc")
@@ -609,12 +642,36 @@ object ControlManager {
         commands.add("settings put global preferred_network_mode1 $targetValStr1")
         commands.add("settings put global preferred_network_mode2 $targetValStr1")
         
+        // Find default data SIM
+        var defaultDataSubId = -1
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                defaultDataSubId = SubscriptionManager.getDefaultDataSubscriptionId()
+            }
+        } catch (e: Exception) {}
+        
+        if (defaultDataSubId == -1) {
+            val result = ShellUtils.runCommand("settings get global multi_sim_data_call", useRoot = false)
+            defaultDataSubId = result.stdout.trim().toIntOrNull() ?: -1
+        }
+        
+        addShellLog("Detected Data SubId: $defaultDataSubId for 5G switch.")
+        
         // Query active mobile SIM cards and configure them
         val sims = getSimCardList(context)
-        for (sim in sims) {
+        val dataSims = if (defaultDataSubId != -1) sims.filter { it.subId == defaultDataSubId } else sims
+        val targetSims = if (dataSims.isEmpty() && sims.isNotEmpty()) listOf(sims.first()) else dataSims
+
+        if (targetSims.isEmpty()) {
+            addShellLog("No target SIMs found for 5G switch!")
+        }
+
+        for (sim in targetSims) {
             val subId = sim.subId
             val slotIndex = sim.slotIndex
-            Log.d(TAG, "Setting preferred network mode $actualMode for SubId: $subId, Slot: $slotIndex")
+            val logMsg = "Setting preferred network mode $actualMode for SubId: $subId, Slot: $slotIndex"
+            Log.d(TAG, logMsg)
+            addShellLog(logMsg)
             
             // Try standard AOSP command with 33
             commands.add("cmd phone set-preferred-network-type $subId $targetValStr1")
@@ -631,7 +688,7 @@ object ControlManager {
         }
         
         // Fallback for logic if sim list somehow empty
-        if (sims.isEmpty()) {
+        if (targetSims.isEmpty() && sims.isEmpty()) {
             for (fallbackSubId in 0..2) {
                 commands.add("cmd phone set-preferred-network-type $fallbackSubId $targetValStr1")
                 commands.add("settings put global preferred_network_mode_$fallbackSubId $targetValStr1")
@@ -639,7 +696,9 @@ object ControlManager {
         }
         
         val runResult = ShellUtils.runCommands(commands, useRoot = true)
-        Log.i(TAG, "setPreferredNetworkType executed with result: ${runResult.isSuccess}")
+        val logMsg = "setPreferredNetworkType ($actualMode, val=$targetValStr1) executed with result: ${runResult.isSuccess}\nStdout: ${runResult.stdout}\nStderr: ${runResult.stderr}"
+        Log.i(TAG, logMsg)
+        addShellLog(logMsg)
         
         // Broadcast a generic connectivity intent to force settings refresh on some OEMs
         ShellUtils.runCommand("am broadcast -a android.intent.action.CONFIGURATION_CHANGED", useRoot = true)

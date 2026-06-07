@@ -32,37 +32,75 @@ object RootSimTool {
                 return
             }
             
-            var targetMethod: java.lang.reflect.Method? = null
-            var invokeArgs: Array<Any>? = null
+            var invokedAny = false
+            var errorLogs = ""
             
             // Search for method
             val methods = isub.javaClass.methods
             for (m in methods) {
                 if (m.name == "setUiccApplicationsEnabled" || m.name == "setSubscriptionEnabled") {
-                    val params = m.parameterTypes
-                    if (params.size == 2) {
-                        if (params[0] == Boolean::class.javaPrimitiveType && params[1] == Int::class.javaPrimitiveType) {
-                            targetMethod = m
-                            invokeArgs = arrayOf(enable, subId)
-                            break
-                        } else if (params[0] == Int::class.javaPrimitiveType && params[1] == Boolean::class.javaPrimitiveType) {
-                            targetMethod = m
-                            invokeArgs = arrayOf(subId, enable)
-                            break
+                    try {
+                        val params = m.parameterTypes
+                        if (params.size == 2) {
+                            if (params[0] == Boolean::class.javaPrimitiveType && params[1] == Int::class.javaPrimitiveType) {
+                                m.invoke(isub, enable, subId)
+                                println("Invoked ${m.name}(Boolean, Int)")
+                                invokedAny = true
+                            } else if (params[0] == Int::class.javaPrimitiveType && params[1] == Boolean::class.javaPrimitiveType) {
+                                m.invoke(isub, subId, enable)
+                                println("Invoked ${m.name}(Int, Boolean)")
+                                invokedAny = true
+                            }
+                        } else if (params.size == 3) {
+                            if (params[0] == String::class.java && params[1] == Int::class.javaPrimitiveType && params[2] == Boolean::class.javaPrimitiveType) {
+                                m.invoke(isub, "com.android.shell", subId, enable)
+                                println("Invoked ${m.name}(String, Int, Boolean)")
+                                invokedAny = true
+                            }
                         }
+                    } catch(e: Exception) {
+                        errorLogs += "Failed to invoke ${m.name}: ${e.message}\n"
                     }
                 }
             }
             
-            if (targetMethod != null) {
-                println("Found target method: ${targetMethod.name}")
-                targetMethod.invoke(isub, *invokeArgs!!)
+            if (invokedAny) {
+                // Set default voice and SMS to "ask every time" (-1)
+                try {
+                    for (m in methods) {
+                        if (m.name == "setDefaultVoiceSubId" || m.name == "setDefaultSmsSubId") {
+                            if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Int::class.javaPrimitiveType) {
+                                m.invoke(isub, -1)
+                                println("Invoked ${m.name}(-1)")
+                            }
+                        }
+                    }
+                } catch(e: Exception) {}
+
+                // If a remaining subId is provided, set it as default data to prevent the system dialog
+                if (args.size >= 3) {
+                    val targetDataSubId = args[2].toIntOrNull() ?: -1
+                    if (targetDataSubId != -1) {
+                        for (m in methods) {
+                            if (m.name == "setDefaultDataSubId") {
+                                try {
+                                    if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Int::class.javaPrimitiveType) {
+                                        m.invoke(isub, targetDataSubId)
+                                        println("Invoked setDefaultDataSubId($targetDataSubId)")
+                                    }
+                                } catch(e: Exception) {}
+                            }
+                        }
+                    }
+                }
                 println("SUCCESS_ROOT_API")
             } else {
-                println("Error: Target method not found in ISub")
+                println("Error: Target method not found in ISub or failed to invoke.")
+                println(errorLogs)
                 println("Available methods:")
                 for (m in methods) {
-                    println(m.name)
+                    val paramsStr = m.parameterTypes.map { it.simpleName }.joinToString(", ")
+                    println("${m.name}($paramsStr)")
                 }
             }
         } catch (e: Exception) {

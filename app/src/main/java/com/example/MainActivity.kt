@@ -139,7 +139,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     var activeColorHex by remember { mutableStateOf(PrefsManager.getActiveColor(context)) }
     var inactiveColorHex by remember { mutableStateOf(PrefsManager.getInactiveColor(context)) }
     
-    var simDebugLog by remember { mutableStateOf("") }
+    val simDebugLog by ControlManager.shellLogFlow.collectAsState()
 
     fun refreshSimList() {
         coroutineScope.launch(Dispatchers.IO) {
@@ -771,7 +771,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "已启用深度硬件兼容模式 (支持小米、OPPO、VIVO 等机型全局 5G 开关强切)。插入 USB 供电时尝试并发切换至 5G 网络，断开则秒切 4G，兼顾高性能与极致省电。",
+                            text = "已启用深度硬件兼容模式 (支持机型全局 5G 开关强切)。将始终对当前使用移动流量数据的 SIM 卡尝试并发切换至 5G 网络，断开则秒切 4G，兼顾高性能与极致省电。",
                             color = Color(0xFF1B5E20).copy(alpha = 0.8f),
                             fontSize = 12.sp,
                             lineHeight = 17.sp
@@ -1024,7 +1024,6 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                                         toggleLoading = false
                                                         refreshSimList()
                                                         if (success) {
-                                                            simDebugLog = "成功:\n" + ControlManager.lastSetSubscriptionError // Show debug logic even when successful
                                                             if (checked) {
                                                                 Toast.makeText(context, "副卡 ${secondarySim.displayName} 已开启，默认拨号/短信已配置为系统级主动质询询问机制！", Toast.LENGTH_LONG).show()
                                                             } else {
@@ -1032,7 +1031,6 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                                             }
                                                         } else {
                                                             val errMsg = ControlManager.lastSetSubscriptionError
-                                                            simDebugLog = "失败:\n$errMsg"
                                                             Toast.makeText(context, "切换状态失败，请查看页面底部详细信息", Toast.LENGTH_LONG).show()
                                                         }
                                                     }
@@ -1292,7 +1290,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                 Text("复制完整的日志", color = Color.White, fontSize = 12.sp)
                             }
                             Button(
-                                onClick = { simDebugLog = "" },
+                                onClick = { ControlManager.shellLogFlow.value = "" },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBA1A1A)),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
