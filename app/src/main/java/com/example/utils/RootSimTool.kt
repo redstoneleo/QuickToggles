@@ -138,14 +138,73 @@ object RootSimTool {
                 return
             }
             
+            // Allow hidden api reflection using Reflection hack for Android P+ if necessary
+            try {
+                val vmRuntimeClass = Class.forName("dalvik.system.VMRuntime")
+                val getRuntimeMethod = vmRuntimeClass.getDeclaredMethod("getRuntime")
+                val runtime = getRuntimeMethod.invoke(null)
+                val setHiddenApiExemptionsMethod = vmRuntimeClass.getDeclaredMethod("setHiddenApiExemptions", Array<String>::class.java)
+                setHiddenApiExemptionsMethod.invoke(runtime, arrayOf("L"))
+                println("Bypassed hidden API in RootSimTool")
+            } catch (e: Exception) {
+                println("Failed to bypass hidden APIs: ${e.message}")
+            }
+
+            val itelInterface = Class.forName("com.android.internal.telephony.ITelephony")
+            
             var success = false
-            for (m in itel.javaClass.methods) {
+            for (m in itelInterface.methods) {
                 if (m.name == "setPreferredNetworkType" && m.parameterTypes.size == 2) {
-                    m.invoke(itel, subId, networkType)
-                    println("Invoked setPreferredNetworkType")
-                    success = true
+                    try {
+                        m.invoke(itel, subId, networkType)
+                        println("Invoked setPreferredNetworkType")
+                        success = true
+                    } catch (e: Exception) { println("err setPreferredNetworkType: ${e.message}") }
+                }
+                if (m.name == "setPreferredNetworkTypeForPhone" && m.parameterTypes.size == 2) {
+                    try {
+                        m.invoke(itel, 0, networkType)
+                        m.invoke(itel, 1, networkType)
+                        println("Invoked setPreferredNetworkTypeForPhone")
+                        success = true
+                    } catch (e: Exception) { println("err setPreferredNetworkTypeForPhone: ${e.message}") }
+                }
+                if (m.name == "setPreferredNetworkTypeForSubscriber" && m.parameterTypes.size == 2) {
+                    try {
+                        m.invoke(itel, subId, networkType)
+                        println("Invoked setPreferredNetworkTypeForSubscriber")
+                        success = true
+                    } catch (e: Exception) { println("err setPreferredNetworkTypeForSubscriber: ${e.message}") }
                 }
             }
+            
+            // Try modern Android 11+ Bitmask APIs
+            // NETWORK_TYPE_NR (5G) is 20, so bitmask is (1 << 19)
+            // Bitmask up to 18 (4G/LTE limits) or up to 20 (5G limits)
+            val is5G = (networkType == 33 || networkType == 26 || networkType == 31 || networkType == 32)
+            
+            // Create a generous bitmask combining 2G/3G/4G/5G
+            // 4G/LTE is 13 (so 1<<12), LTE_CA is 19 (so 1<<18)
+            val mask2g3g4g = ((1L shl 19) - 1) // Covers everything up to 19 (1..19)
+            val targetMask = if (is5G) mask2g3g4g or (1L shl 19) else mask2g3g4g 
+            
+            for (m in itelInterface.methods) {
+                if (m.name == "setAllowedNetworkTypesForReason" && m.parameterTypes.size == 3) {
+                    try {
+                        m.invoke(itel, subId, 0, targetMask) // reason 0 = ALLOWED_NETWORK_TYPES_REASON_USER
+                        println("Invoked setAllowedNetworkTypesForReason")
+                        success = true 
+                    } catch (e: Exception) { println("err setAllowedNetworkTypesForReason: ${e.message}") }
+                }
+                if (m.name == "setAllowedNetworkTypesBitmask" && m.parameterTypes.size == 2) {
+                    try {
+                        m.invoke(itel, subId, targetMask)
+                        println("Invoked setAllowedNetworkTypesBitmask")
+                        success = true
+                    } catch (e: Exception) { println("err setAllowedNetworkTypesBitmask: ${e.message}") }
+                }
+            }
+            
             if (success) println("SUCCESS_NETWORK_API")
             else println("Failed to find network toggle method via ITelephony. Older/Newer Android version.")
         } catch (e: Exception) {

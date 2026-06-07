@@ -614,11 +614,13 @@ class ScreenStateService : Service() {
                 try {
                     val plugged = getBatteryPluggedState(context)
                     // Treat any external plugged state != 0 as USB powered (since AC chargers are also USB)
-                    val isUsbPowered = (plugged != 0) || isUsbConnectedToComputer(context)
                     val isDataOn = ControlManager.isMobileDataEnabled(context)
-                    val targetMode = if (isUsbPowered && isDataOn) "5G" else "4G"
+                    val isPcConnected = isUsbConnectedToComputer(context)
+                    val isUsbTethering = isUsbTetheringConfigured(context)
                     
-                    val msg = "ScreenStateService checkAndApplyUsb5gAdjustment: plugged=$plugged, isUsbPowered=$isUsbPowered, isDataOn=$isDataOn -> Setting preferred network to $targetMode"
+                    val targetMode = if (isDataOn && isPcConnected && isUsbTethering) "5G" else "4G"
+                    
+                    val msg = "ScreenStateService checkAndApplyUsb5gAdjustment: isDataOn=$isDataOn, isPcConnected=$isPcConnected, isUsbTethering=$isUsbTethering -> Setting preferred network to $targetMode"
                     Log.i(TAG, msg)
                     ControlManager.addShellLog(msg)
                     ControlManager.setPreferredNetworkType(context, targetMode)

@@ -771,7 +771,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "已启用深度硬件兼容模式 (支持机型全局 5G 开关强切)。将始终对当前使用移动流量数据的 SIM 卡尝试并发切换至 5G 网络，断开则秒切 4G，兼顾高性能与极致省电。",
+                            text = "已启用深度硬件兼容模式。开启流量、连接电脑且处于 USB 共享网络模式时，将尝试对主力流量卡强切 5G；断开共享则秒切回 4G，兼顾高性能与极致省电。",
                             color = Color(0xFF1B5E20).copy(alpha = 0.8f),
                             fontSize = 12.sp,
                             lineHeight = 17.sp

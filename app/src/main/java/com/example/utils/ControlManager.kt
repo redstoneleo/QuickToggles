@@ -689,7 +689,15 @@ object ControlManager {
             // App_process java call to invoke ITelephony
             val javaCmd = "export CLASSPATH=${context.packageCodePath}; app_process /system/bin com.example.utils.RootSimTool network $subId $targetValStr1"
             commands.add(javaCmd)
+            
+            // Force settings update
+            commands.add("setprop persist.radio.preferred_network_mode $targetValStr1")
+            commands.add("setprop persist.radio.preferred_network_mode_$subId $targetValStr1")
+            commands.add("setprop persist.radio.preferred_network_mode$slotIndex $targetValStr1")
         }
+        
+        // As a last-resort hammer on some systems, force a data reconnect
+        commands.add("svc data disable && sleep 1 && svc data enable")
         
         // Fallback for logic if sim list somehow empty
         if (targetSims.isEmpty() && sims.isEmpty()) {
