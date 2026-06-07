@@ -798,6 +798,67 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        // Manual Testing Buttons
+                        var isTesting5G by remember { mutableStateOf(false) }
+                        
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    isTesting5G = true
+                                    coroutineScope.launch(Dispatchers.IO) {
+                                        try {
+                                            ControlManager.addShellLog("Manual Test: Requesting 5G mode...")
+                                            val success = ControlManager.setPreferredNetworkType(context, "5G")
+                                            withContext(Dispatchers.Main) {
+                                                isTesting5G = false
+                                                Toast.makeText(context, if(success) "5G 命令发送成功" else "5G 命令发送失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) { isTesting5G = false }
+                                            ControlManager.addShellLog("Error in 5G test: ${e.message}")
+                                        }
+                                    }
+                                },
+                                enabled = !isTesting5G,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                if (isTesting5G) {
+                                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text("强切 5G", fontSize = 12.sp)
+                                }
+                            }
+                            
+                            Button(
+                                onClick = {
+                                    isTesting5G = true
+                                    coroutineScope.launch(Dispatchers.IO) {
+                                        try {
+                                            ControlManager.addShellLog("Manual Test: Requesting 4G mode...")
+                                            val success = ControlManager.setPreferredNetworkType(context, "4G")
+                                            withContext(Dispatchers.Main) {
+                                                isTesting5G = false
+                                                Toast.makeText(context, if(success) "4G 命令发送成功" else "4G 命令发送失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) { isTesting5G = false }
+                                            ControlManager.addShellLog("Error in 4G test: ${e.message}")
+                                        }
+                                    }
+                                },
+                                enabled = !isTesting5G,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF388E3C)),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("平滑 4G", fontSize = 12.sp)
+                            }
+                        }
                     }
 
                     Switch(

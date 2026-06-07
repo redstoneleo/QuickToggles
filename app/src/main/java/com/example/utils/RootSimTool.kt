@@ -6,6 +6,18 @@ object RootSimTool {
     @JvmStatic
     fun main(args: Array<String>) {
         try {
+            if (args.isEmpty()) {
+                println("Error: Missing args")
+                return
+            }
+            
+            if (args[0] == "network") {
+                val subId = args[1].toInt()
+                val type = args[2].toInt()
+                handleNetworkSwitch(subId, type)
+                return
+            }
+            
             if (args.size < 2) {
                 println("Error: Missing args (subId, enable)")
                 return
@@ -106,6 +118,38 @@ object RootSimTool {
         } catch (e: Exception) {
             e.printStackTrace()
             System.err.println("Exception: ${e.message}")
+        }
+    }
+
+    private fun handleNetworkSwitch(subId: Int, networkType: Int) {
+        try {
+            val smClass = Class.forName("android.os.ServiceManager")
+            val getServiceMethod = smClass.getMethod("getService", String::class.java)
+            val binder = getServiceMethod.invoke(null, "phone") as IBinder?
+            if (binder == null) {
+                println("Error: phone service not found")
+                return
+            }
+            val itelClass = Class.forName("com.android.internal.telephony.ITelephony\$Stub")
+            val asInterfaceMethod = itelClass.getMethod("asInterface", IBinder::class.java)
+            val itel = asInterfaceMethod.invoke(null, binder)
+            if (itel == null) {
+                println("Error: ITelephony interface is null")
+                return
+            }
+            
+            var success = false
+            for (m in itel.javaClass.methods) {
+                if (m.name == "setPreferredNetworkType" && m.parameterTypes.size == 2) {
+                    m.invoke(itel, subId, networkType)
+                    println("Invoked setPreferredNetworkType")
+                    success = true
+                }
+            }
+            if (success) println("SUCCESS_NETWORK_API")
+            else println("Failed to find network toggle method via ITelephony. Older/Newer Android version.")
+        } catch (e: Exception) {
+            println("Exception in handleNetworkSwitch: ${e.message}")
         }
     }
 }

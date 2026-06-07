@@ -685,6 +685,10 @@ object ControlManager {
             commands.add("settings put global preferred_network_mode_$subId $targetValStr1")
             commands.add("settings put global preferred_network_mode$slotIndex $targetValStr1")
             commands.add("settings put global preferred_network_mode_${slotIndex} $targetValStr1")
+            
+            // App_process java call to invoke ITelephony
+            val javaCmd = "export CLASSPATH=${context.packageCodePath}; app_process /system/bin com.example.utils.RootSimTool network $subId $targetValStr1"
+            commands.add(javaCmd)
         }
         
         // Fallback for logic if sim list somehow empty
