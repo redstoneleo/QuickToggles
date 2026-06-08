@@ -152,8 +152,12 @@ object RootSimTool {
 
             val itelInterface = Class.forName("com.android.internal.telephony.ITelephony")
             
+            val allMethods = mutableMapOf<String, java.lang.reflect.Method>()
+            for (m in itelInterface.methods) allMethods["${m.name}(${m.parameterTypes.joinToString{it.simpleName}})"] = m
+            for (m in itel.javaClass.methods) allMethods["${m.name}(${m.parameterTypes.joinToString{it.simpleName}})"] = m
+            
             var success = false
-            for (m in itelInterface.methods) {
+            for (m in allMethods.values) {
                 if (m.name == "setPreferredNetworkType" && m.parameterTypes.size == 2) {
                     try {
                         m.invoke(itel, subId, networkType)
@@ -188,17 +192,17 @@ object RootSimTool {
             val mask2g3g4g = ((1L shl 19) - 1) // Covers everything up to 19 (1..19)
             val targetMask = if (is5G) mask2g3g4g or (1L shl 19) else mask2g3g4g 
             
-            for (m in itelInterface.methods) {
+            for (m in allMethods.values) {
                 if (m.name == "setAllowedNetworkTypesForReason" && m.parameterTypes.size == 3) {
                     try {
-                        m.invoke(itel, subId, 0, targetMask) // reason 0 = ALLOWED_NETWORK_TYPES_REASON_USER
+                        m.invoke(itel, subId, 0, java.lang.Long.valueOf(targetMask)) // reason 0 = ALLOWED_NETWORK_TYPES_REASON_USER
                         println("Invoked setAllowedNetworkTypesForReason")
                         success = true 
                     } catch (e: Exception) { println("err setAllowedNetworkTypesForReason: ${e.message}") }
                 }
                 if (m.name == "setAllowedNetworkTypesBitmask" && m.parameterTypes.size == 2) {
                     try {
-                        m.invoke(itel, subId, targetMask)
+                        m.invoke(itel, subId, java.lang.Long.valueOf(targetMask))
                         println("Invoked setAllowedNetworkTypesBitmask")
                         success = true
                     } catch (e: Exception) { println("err setAllowedNetworkTypesBitmask: ${e.message}") }
@@ -206,7 +210,11 @@ object RootSimTool {
             }
             
             if (success) println("SUCCESS_NETWORK_API")
-            else println("Failed to find network toggle method via ITelephony. Older/Newer Android version.")
+            else {
+                println("Failed to find network toggle method via ITelephony. Older/Newer Android version.")
+                println("--- Available methods ---")
+                allMethods.keys.filter { it.contains("etwork") || it.contains("Network") }.forEach { println(it) }
+            }
         } catch (e: Exception) {
             println("Exception in handleNetworkSwitch: ${e.message}")
         }
