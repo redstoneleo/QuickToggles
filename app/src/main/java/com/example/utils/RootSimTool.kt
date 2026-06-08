@@ -14,7 +14,8 @@ object RootSimTool {
             if (args[0] == "network") {
                 val subId = args[1].toInt()
                 val type = args[2].toInt()
-                handleNetworkSwitch(subId, type)
+                val slotIndex = if (args.size > 3) args[3].toInt() else -1
+                handleNetworkSwitch(subId, type, slotIndex)
                 return
             }
             
@@ -121,7 +122,7 @@ object RootSimTool {
         }
     }
 
-    private fun handleNetworkSwitch(subId: Int, networkType: Int) {
+    private fun handleNetworkSwitch(subId: Int, networkType: Int, slotIndex: Int) {
         try {
             val smClass = Class.forName("android.os.ServiceManager")
             val getServiceMethod = smClass.getMethod("getService", String::class.java)
@@ -157,6 +158,59 @@ object RootSimTool {
             for (m in itel.javaClass.methods) allMethods["${m.name}(${m.parameterTypes.joinToString{it.simpleName}})"] = m
             
             var success = false
+
+            // Try modern Android 11+ Bitmask APIs FIRST (primary Android 12+ APIs)
+            // NETWORK_TYPE_NR (5G) is 20, so bitmask is (1 << 19)
+            val is5G = (networkType == 33 || networkType == 26 || networkType == 31 || networkType == 32)
+            val mask2g3g4g = ((1L shl 19) - 1)
+            val targetMask = if (is5G) mask2g3g4g or (1L shl 19) else mask2g3g4g 
+            
+            for (m in allMethods.values) {
+                if (m.name == "setAllowedNetworkTypesForReason") {
+                    try {
+                        if (m.parameterTypes.size == 3) {
+                            m.invoke(itel, subId, 0, java.lang.Long.valueOf(targetMask)) // reason 0 = ALLOWED_NETWORK_TYPES_REASON_USER
+                            println("Invoked setAllowedNetworkTypesForReason (3 params)")
+                            success = true
+                        } else if (m.parameterTypes.size == 4) {
+                            try {
+                                m.invoke(itel, subId, 0, java.lang.Long.valueOf(targetMask), "com.android.shell")
+                                println("Invoked setAllowedNetworkTypesForReason (4 params) with subId")
+                                success = true
+                            } catch (e: Exception) {
+                                println("err setAllowedNetworkTypesForReason subId: ${e.message}")
+                                if (slotIndex >= 0) {
+                                    try {
+                                        m.invoke(itel, slotIndex, 0, java.lang.Long.valueOf(targetMask), "com.android.shell")
+                                        println("Invoked setAllowedNetworkTypesForReason (4 params) with slotIndex")
+                                        success = true
+                                    } catch (e2: Exception) {}
+                                }
+                            }
+                        }
+                    } catch (e: Exception) { println("err setAllowedNetworkTypesForReason: ${e.message}") }
+                }
+                if (m.name == "setAllowedNetworkTypesBitmask" && m.parameterTypes.size == 2) {
+                    // Try passing subId first
+                    try {
+                        m.invoke(itel, subId, java.lang.Long.valueOf(targetMask))
+                        println("Invoked setAllowedNetworkTypesBitmask with subId")
+                        success = true
+                    } catch (e: Exception) { 
+                        println("err setAllowedNetworkTypesBitmask subId: ${e.message}") 
+                        // Try phoneId instead
+                        if (slotIndex >= 0) {
+                            try {
+                                m.invoke(itel, slotIndex, java.lang.Long.valueOf(targetMask))
+                                println("Invoked setAllowedNetworkTypesBitmask with slotIndex")
+                                success = true
+                            } catch (e2: Exception) {}
+                        }
+                    }
+                }
+            }
+            
+            // Fallback to deprecated APIs
             for (m in allMethods.values) {
                 if (m.name == "setPreferredNetworkType" && m.parameterTypes.size == 2) {
                     try {
@@ -167,10 +221,11 @@ object RootSimTool {
                 }
                 if (m.name == "setPreferredNetworkTypeForPhone" && m.parameterTypes.size == 2) {
                     try {
-                        m.invoke(itel, 0, networkType)
-                        m.invoke(itel, 1, networkType)
-                        println("Invoked setPreferredNetworkTypeForPhone")
-                        success = true
+                        if (slotIndex >= 0) {
+                            m.invoke(itel, slotIndex, networkType)
+                            println("Invoked setPreferredNetworkTypeForPhone for slot $slotIndex")
+                            success = true
+                        }
                     } catch (e: Exception) { println("err setPreferredNetworkTypeForPhone: ${e.message}") }
                 }
                 if (m.name == "setPreferredNetworkTypeForSubscriber" && m.parameterTypes.size == 2) {
@@ -179,33 +234,6 @@ object RootSimTool {
                         println("Invoked setPreferredNetworkTypeForSubscriber")
                         success = true
                     } catch (e: Exception) { println("err setPreferredNetworkTypeForSubscriber: ${e.message}") }
-                }
-            }
-            
-            // Try modern Android 11+ Bitmask APIs
-            // NETWORK_TYPE_NR (5G) is 20, so bitmask is (1 << 19)
-            // Bitmask up to 18 (4G/LTE limits) or up to 20 (5G limits)
-            val is5G = (networkType == 33 || networkType == 26 || networkType == 31 || networkType == 32)
-            
-            // Create a generous bitmask combining 2G/3G/4G/5G
-            // 4G/LTE is 13 (so 1<<12), LTE_CA is 19 (so 1<<18)
-            val mask2g3g4g = ((1L shl 19) - 1) // Covers everything up to 19 (1..19)
-            val targetMask = if (is5G) mask2g3g4g or (1L shl 19) else mask2g3g4g 
-            
-            for (m in allMethods.values) {
-                if (m.name == "setAllowedNetworkTypesForReason" && m.parameterTypes.size == 3) {
-                    try {
-                        m.invoke(itel, subId, 0, java.lang.Long.valueOf(targetMask)) // reason 0 = ALLOWED_NETWORK_TYPES_REASON_USER
-                        println("Invoked setAllowedNetworkTypesForReason")
-                        success = true 
-                    } catch (e: Exception) { println("err setAllowedNetworkTypesForReason: ${e.message}") }
-                }
-                if (m.name == "setAllowedNetworkTypesBitmask" && m.parameterTypes.size == 2) {
-                    try {
-                        m.invoke(itel, subId, java.lang.Long.valueOf(targetMask))
-                        println("Invoked setAllowedNetworkTypesBitmask")
-                        success = true
-                    } catch (e: Exception) { println("err setAllowedNetworkTypesBitmask: ${e.message}") }
                 }
             }
             

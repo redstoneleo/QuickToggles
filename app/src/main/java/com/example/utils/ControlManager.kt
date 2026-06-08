@@ -673,13 +673,18 @@ object ControlManager {
             Log.d(TAG, logMsg)
             addShellLog(logMsg)
             
-            // Try standard AOSP command with 33
-            commands.add("cmd phone set-preferred-network-type $subId $targetValStr1")
-            
-            // On some Custom ROMs (e.g. LineageOS patches), set-preferred-network-type expects the slot index (0 or 1)
-            if (slotIndex != subId && slotIndex >= 0) {
+            // Try modern bitmask command via shell (Android 12+)
+            // 5G Network Type Bitmask is 1 << 19. If 5G, we pass mask 2g3g4g5g, else 2g3g4g
+            val mask2g3g4g = ((1L shl 19) - 1)
+            val targetMask = if (actualMode == "5G") mask2g3g4g or (1L shl 19) else mask2g3g4g
+            commands.add("cmd phone set-allowed-network-types-bitmask $slotIndex $targetMask")
+
+            // standard AOSP command typically expects phoneId (slotIndex)
+            if (slotIndex >= 0) {
                 commands.add("cmd phone set-preferred-network-type $slotIndex $targetValStr1")
             }
+            // Fallback to subId just in case some OEM modified it to take subId
+            commands.add("cmd phone set-preferred-network-type $subId $targetValStr1")
             
             // Settings DB tables
             commands.add("settings put global preferred_network_mode_$subId $targetValStr1")
@@ -687,7 +692,7 @@ object ControlManager {
             commands.add("settings put global preferred_network_mode_${slotIndex} $targetValStr1")
             
             // App_process java call to invoke ITelephony
-            val javaCmd = "export CLASSPATH=${context.packageCodePath}; app_process /system/bin com.example.utils.RootSimTool network $subId $targetValStr1"
+            val javaCmd = "export CLASSPATH=${context.packageCodePath}; app_process /system/bin com.example.utils.RootSimTool network $subId $targetValStr1 $slotIndex"
             commands.add(javaCmd)
             
             // Force settings update
