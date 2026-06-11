@@ -136,6 +136,8 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     var autoDataToggle by remember { mutableStateOf(PrefsManager.isAutoDataToggleEnabled(context)) }
     var flashlightPowerControl by remember { mutableStateOf(PrefsManager.isFlashlightPowerControlEnabled(context)) }
     var usb5gToggle by remember { mutableStateOf(PrefsManager.isUsb5gToggleEnabled(context)) }
+    var sleepModeToggle by remember { mutableStateOf(PrefsManager.isSleepModeEnabled(context)) }
+    var manualSleepModeActive by remember { mutableStateOf(PrefsManager.isManualSleepActive(context)) }
     var activeColorHex by remember { mutableStateOf(PrefsManager.getActiveColor(context)) }
     var inactiveColorHex by remember { mutableStateOf(PrefsManager.getInactiveColor(context)) }
     
@@ -571,6 +573,278 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
             }
         }
 
+        // 4.8. SIM Card Management Bento Card
+        item {
+            Spacer(modifier = Modifier.height(16.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color.White)
+                    .border(BorderStroke(1.dp, bentoBorderColor), RoundedCornerShape(28.dp))
+                    .padding(20.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "双卡智能控制 & 主动询问",
+                                color = bentoTextDark,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "一键启用/禁用特定的 SIM 卡插槽。在新开启 SIM 卡时，系统自带的默认拨号和短信配置将重置为“每次主动询问”模式（流量不进行询问，自动锁定由原卡默认提供），只有在通话/短信触发时，系统级别的卡槽选择器才会跳出供您主动选择，再次点击即可快速安全关闭。",
+                                color = bentoTextSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp
+                            )
+                        }
+                        
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFE8DEF8)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("🎴", fontSize = 20.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (simCardList.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(bentoBg)
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "未检测到已插入的 SIM 卡",
+                                    color = bentoTextSecondary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "请确认是否授予了“电话/读取电话状态”权限，或设备已插入卡",
+                                    color = bentoTextSecondary.copy(alpha = 0.7f),
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        permissionLauncher.launch(permissionsToRequest)
+                                        refreshSimList()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF001D36)
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("重新获取权限/刷新", fontSize = 11.sp, color = Color.White)
+                                }
+                            }
+                        }
+                    } else {
+                        val defaultDataSubId = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                            android.telephony.SubscriptionManager.getDefaultDataSubscriptionId()
+                        } else {
+                            -1
+                        }
+
+                        val mainSim = if (defaultDataSubId != -1) {
+                            simCardList.firstOrNull { it.subId == defaultDataSubId } ?: simCardList.firstOrNull { it.slotIndex == 0 }
+                        } else {
+                            simCardList.firstOrNull { it.slotIndex == 0 }
+                        }
+
+                        val secondarySim = simCardList.firstOrNull { it != mainSim }
+
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            var toggleLoading by remember { mutableStateOf(false) }
+
+                            val isSimInserted = (secondarySim != null)
+                            val isSimActive = (secondarySim?.isActive == true)
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(if (isSimActive) Color(0xFFE8F5E9) else bentoBg)
+                                    .border(
+                                        BorderStroke(
+                                            width = 1.dp,
+                                            color = if (isSimActive) Color(0xFFC8E6C9) else Color(0xFFE1E2EC)
+                                        ),
+                                        shape = RoundedCornerShape(20.dp)
+                                    )
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f).padding(end = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isSimActive) Color(0xFF2EBD59) else Color(0xFFB0BEC5)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "2",
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column {
+                                        Text(
+                                            text = if (isSimInserted) "副卡 2 (${secondarySim?.displayName ?: "SIM 2"})" else "副卡 2 (Slot 2)",
+                                            color = bentoTextDark,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = when {
+                                                !isSimInserted -> "检测状态: 未检测到已插卡 (控制开关失效)"
+                                                isSimActive -> "运行中 | 系统拨号与短信已配置为主动询问"
+                                                else -> "已检测到插卡且未启用 | 按钮生效，点击可一键重载配置并启用"
+                                            },
+                                            color = bentoTextSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+
+                                if (toggleLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        color = activeColor,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Switch(
+                                        checked = isSimActive,
+                                        enabled = isSimInserted,
+                                        onCheckedChange = { checked ->
+                                            if (secondarySim != null) {
+                                                toggleLoading = true
+                                                coroutineScope.launch(Dispatchers.IO) {
+                                                    val success = ControlManager.setSubscriptionEnabled(context, secondarySim.subId, checked)
+                                                    
+                                                    if (success) {
+                                                        if (checked) {
+                                                            ControlManager.setDefaultSimsToAsk()
+                                                        }
+                                                        delay(1500)
+                                                    }
+                                                    
+                                                    withContext(Dispatchers.Main) {
+                                                        toggleLoading = false
+                                                        refreshSimList()
+                                                        if (success) {
+                                                            if (checked) {
+                                                                Toast.makeText(context, "副卡 ${secondarySim.displayName} 已开启，默认拨号/短信已配置为系统级主动质询询问机制！", Toast.LENGTH_LONG).show()
+                                                            } else {
+                                                                Toast.makeText(context, "副卡 ${secondarySim.displayName} 已成功休眠关闭！", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        } else {
+                                                            val errMsg = ControlManager.lastSetSubscriptionError
+                                                            Toast.makeText(context, "切换状态失败，请查看页面底部详细信息", Toast.LENGTH_LONG).show()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = Color(0xFF2EBD59),
+                                            uncheckedThumbColor = Color(0xFF74777F),
+                                            uncheckedTrackColor = Color(0xFFE1E2EC),
+                                            disabledCheckedThumbColor = Color.White.copy(alpha = 0.5f),
+                                            disabledCheckedTrackColor = Color(0xFF2EBD59).copy(alpha = 0.4f),
+                                            disabledUncheckedThumbColor = Color(0xFF74777F).copy(alpha = 0.5f),
+                                            disabledUncheckedTrackColor = Color(0xFFE1E2EC).copy(alpha = 0.4f)
+                                        )
+                                    )
+                                }
+                            }
+
+                            // Primary Resident Card Info (Always Active)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Color(0xFFF3F4F6))
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("📌", fontSize = 14.sp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = "主卡 (SIM 1): ${mainSim?.displayName ?: "未检测到或读取中"}",
+                                            color = bentoTextDark,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "系统常驻运行状态（默认提供移动数据，免除拨号与短信质询弹窗）",
+                                            color = bentoTextSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Dynamic Footer Trigger
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Button(
+                                    onClick = { refreshSimList() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF001D36)
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("点击刷新/扫描卡槽状态", fontSize = 11.sp, color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 4. Full-Width Light Blue Auto-Switch Ribbon Block
         item {
             Box(
@@ -892,15 +1166,15 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
             }
         }
 
-        // 4.8. SIM Card Management Bento Card
+        // 4.7. Purple Sleep Mode Ribbon Block
         item {
             Spacer(modifier = Modifier.height(16.dp))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(28.dp))
-                    .background(Color.White)
-                    .border(BorderStroke(1.dp, bentoBorderColor), RoundedCornerShape(28.dp))
+                    .background(Color(0xFFF3E5F5)) // Light Purple
+                    .border(BorderStroke(1.dp, Color(0xFFCE93D8)), RoundedCornerShape(28.dp))
                     .padding(20.dp)
             ) {
                 Column {
@@ -909,255 +1183,170 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                             Text(
-                                text = "双卡智能控制 & 主动询问",
-                                color = bentoTextDark,
+                                text = "夜间睡眠模式 (定时断网/省电)",
+                                color = Color(0xFF4A148C),
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 17.sp
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "一键启用/禁用特定的 SIM 卡插槽。在新开启 SIM 卡时，系统自带的默认拨号和短信配置将重置为“每次主动询问”模式（流量不进行询问，自动锁定由原卡默认提供），只有在通话/短信触发时，系统级别的卡槽选择器才会跳出供您主动选择，再次点击即可快速安全关闭。",
-                                color = bentoTextSecondary,
+                                text = "设定时间段内自动开启“飞行模式”以及系统的“超级省电模式”。减少辐射、勿扰且极端省电。",
+                                color = Color(0xFF4A148C).copy(alpha = 0.8f),
                                 fontSize = 12.sp,
                                 lineHeight = 17.sp
                             )
                         }
-                        
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFFE8DEF8)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("🎴", fontSize = 20.sp)
-                        }
+
+                        Switch(
+                            checked = sleepModeToggle,
+                            onCheckedChange = { checked ->
+                                sleepModeToggle = checked
+                                PrefsManager.setSleepModeEnabled(context, checked)
+
+                                val serviceIntent = Intent(context, ScreenStateService::class.java)
+                                if (checked) {
+                                    ContextCompat.startForegroundService(context, serviceIntent)
+                                    Toast.makeText(context, "夜间睡眠模式已启用", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    // if we are turning it off, and we are currently in sleep mode, we should manually turn off sleep mode in the system
+                                    Thread {
+                                       ControlManager.setSleepModeActive(context, false)
+                                    }.start()
+                                    
+                                    if (!autoDataToggle && !flashlightPowerControl && !usb5gToggle) {
+                                        context.stopService(serviceIntent)
+                                        Toast.makeText(context, "后台服务已关闭", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "自动模式已停用，其它自动服务保持运行", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                activity.refreshAllWidgets()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF6A1B9A),
+                                uncheckedThumbColor = Color(0xFF74777F),
+                                uncheckedTrackColor = Color(0xFFE1BEE7)
+                            )
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    if (sleepModeToggle) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Start Time
+                            var startHour by remember { mutableIntStateOf(PrefsManager.getSleepStartTime(context).first) }
+                            var startMin by remember { mutableIntStateOf(PrefsManager.getSleepStartTime(context).second) }
+                            
+                            val startTimeStr = String.format("%02d:%02d", startHour, startMin)
+                            
+                            Button(
+                                onClick = { 
+                                    // Simulate time picker incrementing hour for simplicity, in a real app would pop TimePickerDialog
+                                    startHour = (startHour + 1) % 24
+                                    PrefsManager.setSleepStartTime(context, startHour, startMin)
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8E24AA)),
+                                contentPadding = PaddingValues(8.dp)
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("开始时间", fontSize = 10.sp, color = Color.White.copy(alpha=0.8f))
+                                    Text(startTimeStr, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
 
-                    if (simCardList.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(bentoBg)
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
+                            // End Time
+                            var endHour by remember { mutableIntStateOf(PrefsManager.getSleepEndTime(context).first) }
+                            var endMin by remember { mutableIntStateOf(PrefsManager.getSleepEndTime(context).second) }
+                            
+                            val endTimeStr = String.format("%02d:%02d", endHour, endMin)
+
+                            Button(
+                                onClick = { 
+                                    endHour = (endHour + 1) % 24
+                                    PrefsManager.setSleepEndTime(context, endHour, endMin)
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8E24AA)),
+                                contentPadding = PaddingValues(8.dp)
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("结束时间", fontSize = 10.sp, color = Color.White.copy(alpha=0.8f))
+                                    Text(endTimeStr, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                        Text(
+                            text = "提示：点击按钮调整小时(简易循环增加)。在此时段内将自动触发飞行模式。",
+                            color = Color(0xFF4A148C).copy(alpha = 0.6f),
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "未检测到已插入的 SIM 卡",
-                                    color = bentoTextSecondary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
+                            Text(
+                                text = "立即睡眠 (提前进入)",
+                                color = Color(0xFF4A148C),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            Switch(
+                                checked = manualSleepModeActive,
+                                onCheckedChange = { checked ->
+                                    manualSleepModeActive = checked
+                                    if (checked) {
+                                        // Calculate exit time based on end time
+                                        val endPair = PrefsManager.getSleepEndTime(context)
+                                        val cal = java.util.Calendar.getInstance()
+                                        cal.set(java.util.Calendar.HOUR_OF_DAY, endPair.first)
+                                        cal.set(java.util.Calendar.MINUTE, endPair.second)
+                                        cal.set(java.util.Calendar.SECOND, 0)
+                                        if (cal.timeInMillis <= System.currentTimeMillis()) {
+                                            cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                                        }
+                                        PrefsManager.setManualSleepExitTime(context, cal.timeInMillis)
+                                        
+                                        // Active the service immediately (if logic isn't checked by the service timer soon)
+                                        Thread { ControlManager.setSleepModeActive(context, true) }.start()
+                                        Toast.makeText(context, "已提前进入睡眠，将在结束时间自动退出", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        PrefsManager.cancelManualSleep(context)
+                                        // Check if we are still turning off or if we are in the time window
+                                        val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                                        val currentMin = java.util.Calendar.getInstance().get(java.util.Calendar.MINUTE)
+                                        val currentTotalMinutes = currentHour * 60 + currentMin
+                                        
+                                        val startPair = PrefsManager.getSleepStartTime(context)
+                                        val endPair = PrefsManager.getSleepEndTime(context)
+                                        val startTotalMinutes = startPair.first * 60 + startPair.second
+                                        val endTotalMinutes = endPair.first * 60 + endPair.second
+                                        
+                                        var inTimeWindow = false
+                                        if (startTotalMinutes <= endTotalMinutes) {
+                                            inTimeWindow = currentTotalMinutes in startTotalMinutes until endTotalMinutes
+                                        } else {
+                                            inTimeWindow = currentTotalMinutes >= startTotalMinutes || currentTotalMinutes < endTotalMinutes
+                                        }
+                                        
+                                        if (!inTimeWindow) {
+                                            Thread { ControlManager.setSleepModeActive(context, false) }.start()
+                                        }
+                                        Toast.makeText(context, "已取消提前睡眠", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFF8E24AA)
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "请确认是否授予了“电话/读取电话状态”权限，或设备已插入卡",
-                                    color = bentoTextSecondary.copy(alpha = 0.7f),
-                                    fontSize = 11.sp,
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        permissionLauncher.launch(permissionsToRequest)
-                                        refreshSimList()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFF001D36)
-                                    ),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.height(32.dp)
-                                ) {
-                                    Text("重新获取权限/刷新", fontSize = 11.sp, color = Color.White)
-                                }
-                            }
-                        }
-                    } else {
-                        val defaultDataSubId = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                            android.telephony.SubscriptionManager.getDefaultDataSubscriptionId()
-                        } else {
-                            -1
-                        }
-
-                        val mainSim = if (defaultDataSubId != -1) {
-                            simCardList.firstOrNull { it.subId == defaultDataSubId } ?: simCardList.firstOrNull { it.slotIndex == 0 }
-                        } else {
-                            simCardList.firstOrNull { it.slotIndex == 0 }
-                        }
-
-                        val secondarySim = simCardList.firstOrNull { it != mainSim }
-
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            var toggleLoading by remember { mutableStateOf(false) }
-
-                            val isSimInserted = (secondarySim != null)
-                            val isSimActive = (secondarySim?.isActive == true)
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(if (isSimActive) Color(0xFFE8F5E9) else bentoBg)
-                                    .border(
-                                        BorderStroke(
-                                            width = 1.dp,
-                                            color = if (isSimActive) Color(0xFFC8E6C9) else Color(0xFFE1E2EC)
-                                        ),
-                                        shape = RoundedCornerShape(20.dp)
-                                    )
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f).padding(end = 8.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(CircleShape)
-                                            .background(if (isSimActive) Color(0xFF2EBD59) else Color(0xFFB0BEC5)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "2",
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 15.sp
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.width(12.dp))
-
-                                    Column {
-                                        Text(
-                                            text = if (isSimInserted) "副卡 2 (${secondarySim?.displayName ?: "SIM 2"})" else "副卡 2 (Slot 2)",
-                                            color = bentoTextDark,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = when {
-                                                !isSimInserted -> "检测状态: 未检测到已插卡 (控制开关失效)"
-                                                isSimActive -> "运行中 | 系统拨号与短信已配置为主动询问"
-                                                else -> "已检测到插卡且未启用 | 按钮生效，点击可一键重载配置并启用"
-                                            },
-                                            color = bentoTextSecondary,
-                                            fontSize = 11.sp
-                                        )
-                                    }
-                                }
-
-                                if (toggleLoading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(24.dp),
-                                        color = activeColor,
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Switch(
-                                        checked = isSimActive,
-                                        enabled = isSimInserted,
-                                        onCheckedChange = { checked ->
-                                            if (secondarySim != null) {
-                                                toggleLoading = true
-                                                coroutineScope.launch(Dispatchers.IO) {
-                                                    val success = ControlManager.setSubscriptionEnabled(context, secondarySim.subId, checked)
-                                                    
-                                                    if (success) {
-                                                        if (checked) {
-                                                            ControlManager.setDefaultSimsToAsk()
-                                                        }
-                                                        delay(1500)
-                                                    }
-                                                    
-                                                    withContext(Dispatchers.Main) {
-                                                        toggleLoading = false
-                                                        refreshSimList()
-                                                        if (success) {
-                                                            if (checked) {
-                                                                Toast.makeText(context, "副卡 ${secondarySim.displayName} 已开启，默认拨号/短信已配置为系统级主动质询询问机制！", Toast.LENGTH_LONG).show()
-                                                            } else {
-                                                                Toast.makeText(context, "副卡 ${secondarySim.displayName} 已成功休眠关闭！", Toast.LENGTH_SHORT).show()
-                                                            }
-                                                        } else {
-                                                            val errMsg = ControlManager.lastSetSubscriptionError
-                                                            Toast.makeText(context, "切换状态失败，请查看页面底部详细信息", Toast.LENGTH_LONG).show()
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        colors = SwitchDefaults.colors(
-                                            checkedThumbColor = Color.White,
-                                            checkedTrackColor = Color(0xFF2EBD59),
-                                            uncheckedThumbColor = Color(0xFF74777F),
-                                            uncheckedTrackColor = Color(0xFFE1E2EC),
-                                            disabledCheckedThumbColor = Color.White.copy(alpha = 0.5f),
-                                            disabledCheckedTrackColor = Color(0xFF2EBD59).copy(alpha = 0.4f),
-                                            disabledUncheckedThumbColor = Color(0xFF74777F).copy(alpha = 0.5f),
-                                            disabledUncheckedTrackColor = Color(0xFFE1E2EC).copy(alpha = 0.4f)
-                                        )
-                                    )
-                                }
-                            }
-
-                            // Primary Resident Card Info (Always Active)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFFF3F4F6))
-                                    .padding(12.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("📌", fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = "主卡 (SIM 1): ${mainSim?.displayName ?: "未检测到或读取中"}",
-                                            color = bentoTextDark,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "系统常驻运行状态（默认提供移动数据，免除拨号与短信质询弹窗）",
-                                            color = bentoTextSecondary,
-                                            fontSize = 11.sp
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Dynamic Footer Trigger
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                Button(
-                                    onClick = { refreshSimList() },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFF001D36)
-                                    ),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.height(32.dp)
-                                ) {
-                                    Text("点击刷新/扫描卡槽状态", fontSize = 11.sp, color = Color.White)
-                                }
-                            }
+                            )
                         }
                     }
                 }

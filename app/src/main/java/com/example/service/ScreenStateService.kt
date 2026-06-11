@@ -64,7 +64,8 @@ class ScreenStateService : Service() {
         val isAutoData = PrefsManager.isAutoDataToggleEnabled(this)
         val isFlashlightCtrl = PrefsManager.isFlashlightPowerControlEnabled(this)
         val isUsb5g = PrefsManager.isUsb5gToggleEnabled(this)
-        if (!isAutoData && !isFlashlightCtrl && !isUsb5g) {
+        val isSleepMode = PrefsManager.isSleepModeEnabled(this)
+        if (!isAutoData && !isFlashlightCtrl && !isUsb5g && !isSleepMode) {
             Log.d(TAG, "All core background features are disabled, self stopping service")
             stopSelf()
             return START_NOT_STICKY
@@ -72,6 +73,9 @@ class ScreenStateService : Service() {
         
         if (isUsb5g) {
             checkAndApplyUsb5gAdjustment(this)
+        }
+        if (isSleepMode) {
+            startSleepModeChecker()
         }
         
         // Return START_STICKY to guarantee restart under memory pressure
@@ -612,18 +616,56 @@ class ScreenStateService : Service() {
         val runnable = Runnable {
             Thread {
                 try {
-                    val plugged = getBatteryPluggedState(context)
-                    // Treat any external plugged state != 0 as USB powered (since AC chargers are also USB)
                     val isDataOn = ControlManager.isMobileDataEnabled(context)
                     val isPcConnected = isUsbConnectedToComputer(context)
                     val isUsbTethering = isUsbTetheringConfigured(context)
+                    val isWifiAp = isWifiApEnabled(context)
                     
-                    val targetMode = if (isDataOn && isPcConnected && isUsbTethering) "5G" else "4G"
+                    val isSharingEnabled = (isPcConnected && isUsbTethering) || isWifiAp
                     
-                    val msg = "ScreenStateService checkAndApplyUsb5gAdjustment: isDataOn=$isDataOn, isPcConnected=$isPcConnected, isUsbTethering=$isUsbTethering -> Setting preferred network to $targetMode"
-                    Log.i(TAG, msg)
-                    ControlManager.addShellLog(msg)
-                    ControlManager.setPreferredNetworkType(context, targetMode)
+                    val targetMode = if (isDataOn && isSharingEnabled) "5G" else "4G"
+                    
+                    if (targetMode == "4G") {
+                        val waitMsg = "ScreenStateService: Sharing stopped. Waiting 20s before switching back to 4G..."
+                        Log.i(TAG, waitMsg)
+                        ControlManager.addShellLog(waitMsg)
+                        
+                        handler.post {
+                            val fallbackRunnable = Runnable {
+                                Thread {
+                                    try {
+                                        val finalDataOn = ControlManager.isMobileDataEnabled(context)
+                                        val finalPcConnected = isUsbConnectedToComputer(context)
+                                        val finalUsbTethering = isUsbTetheringConfigured(context)
+                                        val finalWifiAp = isWifiApEnabled(context)
+                                        
+                                        val finalSharingEnabled = (finalPcConnected && finalUsbTethering) || finalWifiAp
+                                        val finalTargetMode = if (finalDataOn && finalSharingEnabled) "5G" else "4G"
+                                        
+                                        if (finalTargetMode == "4G") {
+                                            val msg = "ScreenStateService: 20s grace period ended, sharing still stopped -> Setting to 4G"
+                                            Log.i(TAG, msg)
+                                            ControlManager.addShellLog(msg)
+                                            ControlManager.setPreferredNetworkType(context, "4G")
+                                        } else {
+                                            val msg = "ScreenStateService: 20s grace period ended, sharing resumed -> Keeping 5G"
+                                            Log.i(TAG, msg)
+                                            ControlManager.addShellLog(msg)
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Error adjusting USB 4G fallback: ${e.message}")
+                                    }
+                                }.start()
+                            }
+                            usb5gRunnable = fallbackRunnable
+                            handler.postDelayed(fallbackRunnable, 20000L)
+                        }
+                    } else {
+                        val msg = "ScreenStateService checkAndApplyUsb5gAdjustment: isDataOn=$isDataOn, SharingEnabled=$isSharingEnabled -> Setting preferred network to 5G"
+                        Log.i(TAG, msg)
+                        ControlManager.addShellLog(msg)
+                        ControlManager.setPreferredNetworkType(context, "5G")
+                    }
                 } catch (e: Exception) {
                     val errMsg = "Error adjusting USB 5G network mode: ${e.message}"
                     Log.e(TAG, errMsg)
@@ -645,6 +687,7 @@ class ScreenStateService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "ScreenStateService Destroyed, cleaning up receivers")
         usb5gRunnable?.let { handler.removeCallbacks(it) }
+        sleepModeRunnable?.let { handler.removeCallbacks(it) }
         try {
             screenReceiver?.let {
                 unregisterReceiver(it)
@@ -680,7 +723,7 @@ class ScreenStateService : Service() {
 
     private fun createNotification(): Notification {
         val title = "快捷控制面板核心服务"
-        val contentText = "屏幕亮屏/息屏自动流量切换服务正在运行"
+        val contentText = "正在运行后台自动化服务"
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_cellular_data)
@@ -690,5 +733,74 @@ class ScreenStateService : Service() {
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOngoing(true)
             .build()
+    }
+
+    private var sleepModeRunnable: Runnable? = null
+    private var isCurrentlyInSleepMode = false
+
+    private fun startSleepModeChecker() {
+        sleepModeRunnable?.let { handler.removeCallbacks(it) }
+        val checkInterval = 60_000L // every minute
+        
+        sleepModeRunnable = object : Runnable {
+            override fun run() {
+                if (PrefsManager.isSleepModeEnabled(this@ScreenStateService)) {
+                    checkAndApplySleepMode()
+                    handler.postDelayed(this, checkInterval)
+                }
+            }
+        }
+        handler.post(sleepModeRunnable!!)
+    }
+
+    private fun checkAndApplySleepMode() {
+        val calendar = java.util.Calendar.getInstance()
+        val currentHour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val currentMinute = calendar.get(java.util.Calendar.MINUTE)
+        val currentTotalMinutes = currentHour * 60 + currentMinute
+        
+        val startPair = PrefsManager.getSleepStartTime(this)
+        val endPair = PrefsManager.getSleepEndTime(this)
+        
+        val startTotalMinutes = startPair.first * 60 + startPair.second
+        val endTotalMinutes = endPair.first * 60 + endPair.second
+        
+        var inTimeWindow = false
+        if (startTotalMinutes <= endTotalMinutes) {
+            // e.g. 01:00 to 06:00
+            inTimeWindow = currentTotalMinutes in startTotalMinutes until endTotalMinutes
+        } else {
+            // e.g. 23:00 to 07:00
+            inTimeWindow = currentTotalMinutes >= startTotalMinutes || currentTotalMinutes < endTotalMinutes
+        }
+
+        // Check if manual sleep is active
+        val manualExitTime = PrefsManager.getManualSleepExitTime(this)
+        var isManualActive = false
+        if (manualExitTime > 0) {
+            if (System.currentTimeMillis() >= manualExitTime) {
+                // Time passed, auto-cancel manual mode
+                PrefsManager.cancelManualSleep(this)
+                Log.i(TAG, "Manual sleep exit time reached. Canceling manual sleep.")
+            } else {
+                isManualActive = true
+            }
+        }
+        
+        val shouldBeInSleepMode = inTimeWindow || isManualActive
+        
+        if (shouldBeInSleepMode && !isCurrentlyInSleepMode) {
+            isCurrentlyInSleepMode = true
+            Log.i(TAG, "Entering Sleep Mode...")
+            Thread {
+                ControlManager.setSleepModeActive(this, true)
+            }.start()
+        } else if (!shouldBeInSleepMode && isCurrentlyInSleepMode) {
+            isCurrentlyInSleepMode = false
+            Log.i(TAG, "Exiting Sleep Mode...")
+            Thread {
+                ControlManager.setSleepModeActive(this, false)
+            }.start()
+        }
     }
 }

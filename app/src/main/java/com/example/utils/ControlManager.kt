@@ -204,6 +204,37 @@ object ControlManager {
         return finalResult.isSuccess
     }
 
+    // --- SLEEP MODE ---
+    fun setSleepModeActive(context: Context, active: Boolean): Boolean {
+        val opState = if (active) "1" else "0"
+        val opBool = if (active) "true" else "false"
+        
+        val commands = listOf(
+            // Airplane mode
+            "settings put global airplane_mode_on $opState",
+            "am broadcast -a android.intent.action.AIRPLANE_MODE --ez state $opBool",
+            // Battery saver (Low Power Mode)
+            "settings put global low_power $opState",
+            "am broadcast -a android.os.action.POWER_SAVE_MODE_CHANGED"
+        )
+        val logMsg = "Setting Sleep Mode active: $active"
+        Log.i(TAG, logMsg)
+        addShellLog(logMsg)
+        
+        val result = ShellUtils.runCommands(commands, useRoot = true)
+        
+        // Also force disable/enable wifi according to airplane mode state just to be safe
+        if (active) {
+            ShellUtils.runCommand("svc wifi disable", useRoot = true)
+            ShellUtils.runCommand("svc bluetooth disable", useRoot = true)
+        } else {
+            // Restore wifi if the user usually has it on? It's better to just toggle airplane mode.
+            // When airplane mode is off, Android usually restores the previous states of Wifi/BT.
+        }
+
+        return result.isSuccess
+    }
+
     // --- WI-FI ---
     fun isWifiEnabled(context: Context): Boolean {
         val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -691,6 +722,12 @@ object ControlManager {
             commands.add("settings put global preferred_network_mode$slotIndex $targetValStr1")
             commands.add("settings put global preferred_network_mode_${slotIndex} $targetValStr1")
             
+            // Other common OEM settings DB keys
+            commands.add("settings put global preferred_network_type_$subId $targetValStr1")
+            commands.add("settings put global preferred_network_type_${slotIndex} $targetValStr1")
+            commands.add("settings put global user_network_mode_$subId $targetValStr1")
+            commands.add("settings put global user_network_mode_${slotIndex} $targetValStr1")
+            
             // App_process java call to invoke ITelephony
             val javaCmd = "export CLASSPATH=${context.packageCodePath}; app_process /system/bin com.example.utils.RootSimTool network $subId $targetValStr1 $slotIndex"
             commands.add(javaCmd)
@@ -699,10 +736,13 @@ object ControlManager {
             commands.add("setprop persist.radio.preferred_network_mode $targetValStr1")
             commands.add("setprop persist.radio.preferred_network_mode_$subId $targetValStr1")
             commands.add("setprop persist.radio.preferred_network_mode$slotIndex $targetValStr1")
+            
+            // Force stop settings app so it re-reads from framework
+            commands.add("am force-stop com.android.settings")
         }
         
-        // As a last-resort hammer on some systems, force a data reconnect
-        commands.add("svc data disable && sleep 1 && svc data enable")
+        // Commenting out the last-resort hammer parameter so it does not forcibly drop connection
+        // commands.add("svc data disable && sleep 1 && svc data enable")
         
         // Fallback for logic if sim list somehow empty
         if (targetSims.isEmpty() && sims.isEmpty()) {

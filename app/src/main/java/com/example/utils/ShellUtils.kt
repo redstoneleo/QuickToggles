@@ -38,16 +38,13 @@ object ShellUtils {
     fun runCommands(cmds: List<String>, useRoot: Boolean = true): CommandResult {
         var process: Process? = null
         var os: DataOutputStream? = null
-        var successReader: BufferedReader? = null
-        var errorReader: BufferedReader? = null
-        val successMsg = StringBuilder()
-        val errorMsg = StringBuilder()
+        var reader: BufferedReader? = null
+        val outputMsg = StringBuilder()
         try {
-            process = if (useRoot) {
-                Runtime.getRuntime().exec("su")
-            } else {
-                Runtime.getRuntime().exec("sh")
-            }
+            val pb = if (useRoot) ProcessBuilder("su") else ProcessBuilder("sh")
+            pb.redirectErrorStream(true) // Merge stderr into stdout to prevent buffer deadlocks
+            process = pb.start()
+            
             os = DataOutputStream(process.outputStream)
             for (cmd in cmds) {
                 os.writeBytes("$cmd\n")
@@ -55,27 +52,21 @@ object ShellUtils {
             os.writeBytes("exit\n")
             os.flush()
 
-            successReader = BufferedReader(InputStreamReader(process.inputStream))
-            errorReader = BufferedReader(InputStreamReader(process.errorStream))
-
+            reader = BufferedReader(InputStreamReader(process.inputStream))
             var line: String?
-            while (successReader.readLine().also { line = it } != null) {
-                successMsg.append(line).append("\n")
-            }
-            while (errorReader.readLine().also { line = it } != null) {
-                errorMsg.append(line).append("\n")
+            while (reader.readLine().also { line = it } != null) {
+                outputMsg.append(line).append("\n")
             }
 
             val exitValue = process.waitFor()
-            return CommandResult(exitValue, successMsg.toString().trim(), errorMsg.toString().trim())
+            return CommandResult(exitValue, outputMsg.toString().trim(), "")
         } catch (e: Exception) {
             Log.e(TAG, "Command list execution failed ($cmds): ${e.message}")
             return CommandResult(-1, "", e.message ?: "Unknown error")
         } finally {
             try {
                 os?.close()
-                successReader?.close()
-                errorReader?.close()
+                reader?.close()
                 process?.destroy()
             } catch (e: Exception) {
                 // Ignore

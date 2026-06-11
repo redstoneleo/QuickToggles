@@ -166,6 +166,7 @@ object RootSimTool {
             val targetMask = if (is5G) mask2g3g4g or (1L shl 19) else mask2g3g4g 
             
             for (m in allMethods.values) {
+                if (success) break
                 if (m.name == "setAllowedNetworkTypesForReason") {
                     try {
                         if (m.parameterTypes.size == 3) {
@@ -190,7 +191,7 @@ object RootSimTool {
                         }
                     } catch (e: Exception) { println("err setAllowedNetworkTypesForReason: ${e.message}") }
                 }
-                if (m.name == "setAllowedNetworkTypesBitmask" && m.parameterTypes.size == 2) {
+                if (m.name == "setAllowedNetworkTypesBitmask" && m.parameterTypes.size == 2 && !success) {
                     // Try passing subId first
                     try {
                         m.invoke(itel, subId, java.lang.Long.valueOf(targetMask))
@@ -211,29 +212,32 @@ object RootSimTool {
             }
             
             // Fallback to deprecated APIs
-            for (m in allMethods.values) {
-                if (m.name == "setPreferredNetworkType" && m.parameterTypes.size == 2) {
-                    try {
-                        m.invoke(itel, subId, networkType)
-                        println("Invoked setPreferredNetworkType")
-                        success = true
-                    } catch (e: Exception) { println("err setPreferredNetworkType: ${e.message}") }
-                }
-                if (m.name == "setPreferredNetworkTypeForPhone" && m.parameterTypes.size == 2) {
-                    try {
-                        if (slotIndex >= 0) {
-                            m.invoke(itel, slotIndex, networkType)
-                            println("Invoked setPreferredNetworkTypeForPhone for slot $slotIndex")
+            if (!success) {
+                for (m in allMethods.values) {
+                    if (success) break
+                    if (m.name == "setPreferredNetworkType" && m.parameterTypes.size == 2) {
+                        try {
+                            m.invoke(itel, subId, networkType)
+                            println("Invoked setPreferredNetworkType")
                             success = true
-                        }
-                    } catch (e: Exception) { println("err setPreferredNetworkTypeForPhone: ${e.message}") }
-                }
-                if (m.name == "setPreferredNetworkTypeForSubscriber" && m.parameterTypes.size == 2) {
-                    try {
-                        m.invoke(itel, subId, networkType)
-                        println("Invoked setPreferredNetworkTypeForSubscriber")
-                        success = true
-                    } catch (e: Exception) { println("err setPreferredNetworkTypeForSubscriber: ${e.message}") }
+                        } catch (e: Exception) { println("err setPreferredNetworkType: ${e.message}") }
+                    }
+                    if (m.name == "setPreferredNetworkTypeForPhone" && m.parameterTypes.size == 2 && !success) {
+                        try {
+                            if (slotIndex >= 0) {
+                                m.invoke(itel, slotIndex, networkType)
+                                println("Invoked setPreferredNetworkTypeForPhone for slot $slotIndex")
+                                success = true
+                            }
+                        } catch (e: Exception) { println("err setPreferredNetworkTypeForPhone: ${e.message}") }
+                    }
+                    if (m.name == "setPreferredNetworkTypeForSubscriber" && m.parameterTypes.size == 2 && !success) {
+                        try {
+                            m.invoke(itel, subId, networkType)
+                            println("Invoked setPreferredNetworkTypeForSubscriber")
+                            success = true
+                        } catch (e: Exception) { println("err setPreferredNetworkTypeForSubscriber: ${e.message}") }
+                    }
                 }
             }
             
