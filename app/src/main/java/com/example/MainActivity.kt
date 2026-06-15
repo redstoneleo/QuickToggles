@@ -685,7 +685,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                             simCardList.forEachIndexed { index, simInfo ->
                                 var toggleLoading by remember(simInfo.subId) { mutableStateOf(false) }
 
-                                val isSimInserted = true
+                                val isSimInserted = simInfo.slotIndex >= 0 && ControlManager.isSimSlotInserted(context, simInfo.slotIndex)
                                 val isSimActive = simInfo.isActive
 
                                 Row(
@@ -734,7 +734,9 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                             )
                                             Spacer(modifier = Modifier.height(2.dp))
                                             Text(
-                                                text = if (isSimActive) {
+                                                text = if (simInfo.subId == -1) {
+                                                    "未分配订阅ID，可能处于休眠或需要重启恢复"
+                                                } else if (isSimActive) {
                                                     "运行中 | 状态良好"
                                                 } else {
                                                     "已休眠 | 点击右侧开关以启用"
@@ -754,7 +756,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                     } else {
                                         Switch(
                                             checked = isSimActive,
-                                            enabled = isSimInserted,
+                                            enabled = isSimInserted && simInfo.subId != -1,
                                             onCheckedChange = { checked ->
                                                 toggleLoading = true
                                                 coroutineScope.launch(Dispatchers.IO) {
