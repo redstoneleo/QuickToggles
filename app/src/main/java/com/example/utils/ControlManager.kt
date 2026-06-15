@@ -371,7 +371,6 @@ object ControlManager {
                     // 2. For inactive SIMs, rely strictly on their reported slotIndex being 0 or 1
                     // Removed SIMs have a slotIndex of -1 (INVALID_SIM_SLOT_INDEX)
                     for (info in allList) {
-                        if (list.size >= 2) break
                         if (info.subscriptionId !in processedSubIds) {
                             if (info.simSlotIndex in 0..1 && list.none { it.slotIndex == info.simSlotIndex }) {
                                 list.add(
@@ -393,8 +392,8 @@ object ControlManager {
         }
 
         // --- ROOT FALLBACK TO AUGMENT APIS ---
-        if (list.size < 2) {
-            Log.i(TAG, "Standard API found < 2 SIMs, attempting Root Content Provider query fallback...")
+        if (list.isEmpty()) {
+            Log.i(TAG, "Standard API found no SIMs, attempting Root Content Provider query fallback...")
             try {
                 val rootResult = ShellUtils.runCommand("content query --uri content://telephony/siminfo", useRoot = true)
                 if (rootResult.isSuccess && rootResult.stdout.isNotEmpty()) {
@@ -453,8 +452,6 @@ object ControlManager {
                     rootSims.sortByDescending { it.subId }
                     
                     for (record in rootSims) {
-                        if (list.size >= 2) break // Allow max 2 SIMs
-                        
                         // Just rely on the root DB's slot_index. If it's 0 or 1, it's currently inserted.
                         // Android sets slot_index to -1 when a SIM is physically removed.
                         if (list.none { it.subId == record.subId } && record.slotIndex in 0..1) {
