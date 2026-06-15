@@ -519,7 +519,7 @@ object ControlManager {
                             }
                         }
                     }
-                    if (displayName.isEmpty() || displayName.startsWith("CARD ", ignoreCase = true) || displayName.startsWith("SIM ", ignoreCase = true)) {
+                    if (displayName.isEmpty() || displayName == "null" || displayName.startsWith("CARD ", ignoreCase = true) || displayName.startsWith("SIM ", ignoreCase = true)) {
                         if (carrierName.isNotEmpty() && carrierName != "null") {
                             displayName = carrierName
                         }
@@ -530,25 +530,35 @@ object ControlManager {
                 }
                 rootSims.sortWith(compareBy({ it.slotIndex }, { -it.subId }))
                 for (rec in rootSims) {
-                    if (list.any { it.slotIndex == rec.slotIndex && rec.slotIndex >= 0 }) {
-                        val existing = list.firstOrNull { it.slotIndex == rec.slotIndex }
-                        if (existing != null && existing.subId == -1 && rec.subId != -1) {
-                            val index = list.indexOf(existing)
-                            list[index] = existing.copy(
-                                subId = rec.subId,
-                                isActive = rec.isActiveRoot,
-                                displayName = if (rec.displayName.isNotEmpty()) rec.displayName else existing.displayName
-                            )
-                        } else if (existing != null) {
-                            // Update display name if root query has a better name and existing is just a placeholder
-                            if (rec.displayName.isNotEmpty() && !rec.displayName.startsWith("SIM ", ignoreCase = true) && !rec.displayName.startsWith("CARD ", ignoreCase = true) && 
-                                (existing.displayName.isEmpty() || existing.displayName.startsWith("SIM ", ignoreCase = true) || existing.displayName.startsWith("CARD ", ignoreCase = true))) {
-                                val index = list.indexOf(existing)
-                                list[index] = existing.copy(
-                                    displayName = rec.displayName
-                                )
-                            }
+                    val existing = list.firstOrNull { it.slotIndex == rec.slotIndex && rec.slotIndex >= 0 }
+                    if (existing != null) {
+                        var newSubId = existing.subId
+                        var newIsActive = existing.isActive
+                        var newDisplayName = existing.displayName
+
+                        if (existing.subId == -1 && rec.subId != -1) {
+                            newSubId = rec.subId
+                            newIsActive = rec.isActiveRoot
                         }
+
+                        // Bugfix Requirement: Always prioritize Root DB displayName for inactive SIMs,
+                        // or if the root DB provides a valid non-placeholder name.
+                        val isRootNameValid = rec.displayName.isNotEmpty() && rec.displayName != "null" &&
+                                              !rec.displayName.startsWith("SIM ", ignoreCase = true) &&
+                                              !rec.displayName.startsWith("CARD ", ignoreCase = true)
+
+                        if (!existing.isActive && rec.displayName.isNotEmpty() && rec.displayName != "null") {
+                            newDisplayName = rec.displayName
+                        } else if (isRootNameValid && (existing.displayName.isEmpty() || existing.displayName.startsWith("SIM ", ignoreCase = true) || existing.displayName.startsWith("CARD ", ignoreCase = true))) {
+                            newDisplayName = rec.displayName
+                        }
+
+                        val index = list.indexOf(existing)
+                        list[index] = existing.copy(
+                            subId = newSubId,
+                            isActive = newIsActive,
+                            displayName = newDisplayName
+                        )
                         continue
                     }
                     if (rec.slotIndex in 0..10 && isSimSlotInserted(context, rec.slotIndex)) {
