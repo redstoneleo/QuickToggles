@@ -362,7 +362,8 @@ object ControlManager {
             val carrierName: String,
             val number: String, 
             val isActiveRoot: Boolean,
-            val hasValidIccId: Boolean
+            val hasValidIccId: Boolean,
+            val iccId: String
         )
         val rootSims = mutableMapOf<Int, RootSimRecord>() // slotIndex -> RootSimRecord
 
@@ -373,8 +374,8 @@ object ControlManager {
                 for (line in rootResult.stdout.lines()) {
                     val t = line.trim()
                     if (!t.startsWith("Row:")) continue
-                    val rowContent = t.substringAfter("Row:").trim()
-                    val regex = Regex("""(\w+)=(.*?)(?=\s*,\s*\w+=|$)""")
+                    val rowContent = t.substringAfter("Row:").trim().replaceFirst(Regex("""^\d+\s+"""), "")
+                    val parts = rowContent.split(Regex(""",\s*(?=[a-zA-Z0-9_]+=)"""))
                     
                     var subId = -1
                     var slotIndex = -1
@@ -385,10 +386,14 @@ object ControlManager {
                     var uiccApplicationsEnabled: Int? = null
                     var fallbackActiveState = false
                     var hasValidIccId = false
+                    var iccId = ""
                     
-                    for (matchResult in regex.findAll(rowContent)) {
-                        val key = matchResult.groupValues[1].lowercase()
-                        val value = matchResult.groupValues[2].trim().trim('"')
+                    for (part in parts) {
+                        val splitIndex = part.indexOf('=')
+                        if (splitIndex == -1) continue
+                        
+                        val key = part.substring(0, splitIndex).trim().lowercase()
+                        val value = part.substring(splitIndex + 1).trim().trim('"')
                         
                         when (key) {
                             "_id", "subscription_id", "sub_id" -> subId = value.toIntOrNull() ?: subId
@@ -403,6 +408,7 @@ object ControlManager {
                             "icc_id", "iccid", "card_id" -> {
                                 if (value.isNotEmpty() && value != "null" && value != "0") {
                                     hasValidIccId = true
+                                    iccId = value
                                 }
                             }
                         }
@@ -424,7 +430,7 @@ object ControlManager {
                         // Sometimes there are multiple rows for one slot, we prefer active ones or newer ones
                         val existing = rootSims[slotIndex]
                         if (existing == null || (!existing.isActiveRoot && isActiveRoot) || (existing.subId < subId && existing.isActiveRoot == isActiveRoot)) {
-                            rootSims[slotIndex] = RootSimRecord(subId, slotIndex, displayName, carrierName, number, isActiveRoot, hasValidIccId)
+                            rootSims[slotIndex] = RootSimRecord(subId, slotIndex, displayName, carrierName, number, isActiveRoot, hasValidIccId, iccId)
                         }
                     }
                 }
@@ -446,7 +452,7 @@ object ControlManager {
             val allList = try { subscriptionManager.allSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
             val activeList = try { subscriptionManager.activeSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
             
-            val allListPhoneCount = ((allList.map { it.simSlotIndex }.filter { it >= 0 }.maxOrNull() ?: -1) + 1)
+            val allListPhoneCount = maxOf(((allList.map { it.simSlotIndex }.filter { it >= 0 }.maxOrNull() ?: -1) + 1), allList.size)
             
             val phoneCount = try {
                 maxOf(modemCount, legacyPhoneCount, rootMaxSlot, allListPhoneCount, 2)
@@ -498,6 +504,14 @@ object ControlManager {
                         var match = allList.firstOrNull { it.simSlotIndex == slot }
                         if (match == null && rootRec != null) {
                             match = allList.firstOrNull { it.subscriptionId == rootRec.subId }
+                            if (match == null && rootRec.hasValidIccId) {
+                                match = allList.firstOrNull { 
+                                    try {
+                                        val matchIccId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) it.iccId else null
+                                        matchIccId == rootRec.iccId 
+                                    } catch (e: Exception) { false }
+                                }
+                            }
                         }
 
                         if (match != null) {
