@@ -367,6 +367,12 @@ object ControlManager {
         )
         val rootSims = mutableMapOf<Int, RootSimRecord>() // slotIndex -> RootSimRecord
 
+        // Phone count evaluation (Do this first to filter invalid slots from root info)
+        val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        val modemCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) telephonyManager?.activeModemCount ?: 1 else 1
+        val legacyPhoneCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) telephonyManager?.phoneCount ?: 1 else 1
+        val phoneCount = try { maxOf(modemCount, legacyPhoneCount, 2) } catch (e: Exception) { 2 }
+
         // 1. Read ALL siminfo from root first (One single query)
         try {
             val rootResult = ShellUtils.runCommand("content query --uri content://telephony/siminfo", useRoot = true, timeoutMs = 4000L)
@@ -426,7 +432,7 @@ object ControlManager {
                         fallbackActiveState
                     }
                     
-                    if (subId != -1 && slotIndex >= 0) {
+                    if (subId != -1 && slotIndex in 0 until phoneCount) {
                         // Sometimes there are multiple rows for one slot, we prefer active ones or newer ones
                         val existing = rootSims[slotIndex]
                         if (existing == null || (!existing.isActiveRoot && isActiveRoot) || (existing.subId < subId && existing.isActiveRoot == isActiveRoot)) {
@@ -443,20 +449,8 @@ object ControlManager {
         try {
             val subscriptionManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
                 ?: return emptyList()
-            val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-
-            val modemCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) telephonyManager?.activeModemCount ?: 1 else 1
-            val legacyPhoneCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) telephonyManager?.phoneCount ?: 1 else 1
-            val rootMaxSlot = (rootSims.values.map { it.slotIndex }.maxOrNull() ?: -1) + 1
-            
             val allList = try { subscriptionManager.allSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
             val activeList = try { subscriptionManager.activeSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
-            
-            val allListPhoneCount = maxOf(((allList.map { it.simSlotIndex }.filter { it >= 0 }.maxOrNull() ?: -1) + 1), allList.size)
-            
-            val phoneCount = try {
-                maxOf(modemCount, legacyPhoneCount, rootMaxSlot, allListPhoneCount, 2)
-            } catch (e: Exception) { 2 }
 
             for (slot in 0 until phoneCount) {
                 // Try to get info directly for slot
@@ -497,7 +491,7 @@ object ControlManager {
                 } else {
                     // Check if it's inserted (using TelephonyManager OR Root DB)
                     val isPhysicallyInserted = isSimSlotInserted(context, slot)
-                    val isRootInserted = rootRec?.hasValidIccId == true
+                    val isRootInserted = rootRec != null
 
                     if (isPhysicallyInserted || isRootInserted) {
                         // Find match in allList
