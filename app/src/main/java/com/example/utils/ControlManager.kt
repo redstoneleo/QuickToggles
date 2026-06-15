@@ -343,7 +343,7 @@ object ControlManager {
                     telephonyManager.simState
                 }
             }
-            return simState != TelephonyManager.SIM_STATE_ABSENT && simState != TelephonyManager.SIM_STATE_UNKNOWN
+            return simState != TelephonyManager.SIM_STATE_ABSENT
         } catch (e: Exception) {
             Log.w(TAG, "isSimSlotInserted error: ${e.message}")
             return false
@@ -359,6 +359,7 @@ object ControlManager {
             val subId: Int, 
             val slotIndex: Int, 
             val displayName: String, 
+            val carrierName: String,
             val number: String, 
             val isActiveRoot: Boolean,
             val hasValidIccId: Boolean
@@ -372,7 +373,8 @@ object ControlManager {
                 for (line in rootResult.stdout.lines()) {
                     val t = line.trim()
                     if (!t.startsWith("Row:")) continue
-                    val parts = t.substringAfter("Row:").split(",")
+                    val rowContent = t.substringAfter("Row:").trim()
+                    val regex = Regex("""(\w+)=(.*?)(?=\s*,\s*\w+=|$)""")
                     
                     var subId = -1
                     var slotIndex = -1
@@ -384,11 +386,9 @@ object ControlManager {
                     var fallbackActiveState = false
                     var hasValidIccId = false
                     
-                    for (part in parts) {
-                        val p = part.trim()
-                        if (!p.contains("=")) continue
-                        val key = p.substringBefore("=").trim().lowercase()
-                        val value = p.substringAfter("=").trim().trim('"')
+                    for (matchResult in regex.findAll(rowContent)) {
+                        val key = matchResult.groupValues[1].lowercase()
+                        val value = matchResult.groupValues[2].trim().trim('"')
                         
                         when (key) {
                             "_id", "subscription_id", "sub_id" -> subId = value.toIntOrNull() ?: subId
@@ -424,7 +424,7 @@ object ControlManager {
                         // Sometimes there are multiple rows for one slot, we prefer active ones or newer ones
                         val existing = rootSims[slotIndex]
                         if (existing == null || (!existing.isActiveRoot && isActiveRoot) || (existing.subId < subId && existing.isActiveRoot == isActiveRoot)) {
-                            rootSims[slotIndex] = RootSimRecord(subId, slotIndex, displayName, number, isActiveRoot, hasValidIccId)
+                            rootSims[slotIndex] = RootSimRecord(subId, slotIndex, displayName, carrierName, number, isActiveRoot, hasValidIccId)
                         }
                     }
                 }
@@ -503,8 +503,14 @@ object ControlManager {
                         if (match != null) {
                             val name = if (rootRec != null && isValidName(rootRec.displayName)) {
                                 rootRec.displayName
+                            } else if (rootRec != null && isValidName(rootRec.carrierName)) {
+                                rootRec.carrierName
+                            } else if (isValidName(match.displayName?.toString() ?: "")) {
+                                match.displayName!!.toString()
+                            } else if (isValidName(match.carrierName?.toString() ?: "")) {
+                                match.carrierName!!.toString()
                             } else {
-                                match.displayName?.toString() ?: "SIM ${slot + 1}"
+                                "SIM ${slot + 1}"
                             }
                             
                             var isActive = rootRec?.isActiveRoot ?: false
@@ -521,12 +527,19 @@ object ControlManager {
                             )
                             processedSubIds.add(match.subscriptionId)
                         } else if (rootRec != null) {
+                            val fallbackName = if (isValidName(rootRec.displayName)) {
+                                rootRec.displayName
+                            } else if (isValidName(rootRec.carrierName)) {
+                                rootRec.carrierName
+                            } else {
+                                "SIM ${slot + 1}"
+                            }
                             // Rely entirely on Root DB parsing
                             list.add(
                                 SimInfo(
                                     subId = rootRec.subId,
                                     slotIndex = slot,
-                                    displayName = if (isValidName(rootRec.displayName)) rootRec.displayName else "SIM ${slot + 1}",
+                                    displayName = fallbackName,
                                     isActive = rootRec.isActiveRoot,
                                     isEmbedded = false,
                                     number = rootRec.number
