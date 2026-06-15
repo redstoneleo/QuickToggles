@@ -391,8 +391,8 @@ object ControlManager {
                         val value = p.substringAfter("=").trim().trim('"')
                         
                         when (key) {
-                            "_id", "subscription_id", "sub_id", "sim_id" -> subId = value.toIntOrNull() ?: subId
-                            "slot_index", "phone_id", "sim_slot_index", "sim_slot", "slot", "simslotindex", "simslot" -> slotIndex = value.toIntOrNull() ?: slotIndex
+                            "_id", "subscription_id", "sub_id" -> subId = value.toIntOrNull() ?: subId
+                            "slot_index", "phone_id", "sim_slot_index", "sim_slot", "slot", "simslotindex", "simslot", "sim_id" -> slotIndex = value.toIntOrNull() ?: slotIndex
                             "display_name", "name" -> displayName = value
                             "carrier_name", "carrier" -> carrierName = value
                             "number", "address" -> number = value
@@ -439,14 +439,18 @@ object ControlManager {
                 ?: return emptyList()
             val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
 
-            val phoneCount = try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) telephonyManager?.activeModemCount ?: 1
-                else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) telephonyManager?.phoneCount ?: 1
-                else 1
-            } catch (e: Exception) { 1 }
-
+            val modemCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) telephonyManager?.activeModemCount ?: 1 else 1
+            val legacyPhoneCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) telephonyManager?.phoneCount ?: 1 else 1
+            val rootMaxSlot = (rootSims.values.map { it.slotIndex }.maxOrNull() ?: -1) + 1
+            
             val allList = try { subscriptionManager.allSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
             val activeList = try { subscriptionManager.activeSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
+            
+            val allListPhoneCount = ((allList.map { it.simSlotIndex }.filter { it >= 0 }.maxOrNull() ?: -1) + 1)
+            
+            val phoneCount = try {
+                maxOf(modemCount, legacyPhoneCount, rootMaxSlot, allListPhoneCount, 2)
+            } catch (e: Exception) { 2 }
 
             for (slot in 0 until phoneCount) {
                 // Try to get info directly for slot

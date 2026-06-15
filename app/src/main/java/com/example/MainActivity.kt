@@ -684,7 +684,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                             simCardList.forEachIndexed { index, simInfo ->
                                 var toggleLoading by remember(simInfo.subId) { mutableStateOf(false) }
 
-                                val isSimInserted = simInfo.slotIndex >= 0 && ControlManager.isSimSlotInserted(context, simInfo.slotIndex)
+                                val isSimInserted = simInfo.slotIndex >= 0 && simInfo.subId != -1
                                 val isSimActive = simInfo.isActive
 
                                 Row(
