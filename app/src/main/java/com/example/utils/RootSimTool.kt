@@ -26,6 +26,18 @@ object RootSimTool {
             val subId = args[0].toInt()
             val enable = args[1].toBoolean()
             
+            // Allow hidden api reflection using Reflection hack for Android P+ if necessary
+            try {
+                val vmRuntimeClass = Class.forName("dalvik.system.VMRuntime")
+                val getRuntimeMethod = vmRuntimeClass.getDeclaredMethod("getRuntime")
+                val runtime = getRuntimeMethod.invoke(null)
+                val setHiddenApiExemptionsMethod = vmRuntimeClass.getDeclaredMethod("setHiddenApiExemptions", Array<String>::class.java)
+                setHiddenApiExemptionsMethod.invoke(runtime, arrayOf("L"))
+                println("Bypassed hidden API in RootSimTool main")
+            } catch (e: Exception) {
+                println("Failed to bypass hidden APIs in main: ${e.message}")
+            }
+
             // Get ServiceManager
             val smClass = Class.forName("android.os.ServiceManager")
             val getServiceMethod = smClass.getMethod("getService", String::class.java)

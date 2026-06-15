@@ -660,105 +660,107 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                             }
                         }
                     } else {
-                        val defaultDataSubId = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                            android.telephony.SubscriptionManager.getDefaultDataSubscriptionId()
-                        } else {
-                            -1
-                        }
-
-                        val mainSim = if (defaultDataSubId != -1) {
-                            simCardList.firstOrNull { it.subId == defaultDataSubId } ?: simCardList.firstOrNull { it.slotIndex == 0 }
-                        } else {
-                            simCardList.firstOrNull { it.slotIndex == 0 }
-                        }
-
-                        val secondarySim = simCardList.firstOrNull { it != mainSim }
-
                         Column(
                             verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            var toggleLoading by remember { mutableStateOf(false) }
-
-                            val isSimInserted = (secondarySim != null)
-                            val isSimActive = (secondarySim?.isActive == true)
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(if (isSimActive) Color(0xFFE8F5E9) else bentoBg)
-                                    .border(
-                                        BorderStroke(
-                                            width = 1.dp,
-                                            color = if (isSimActive) Color(0xFFC8E6C9) else Color(0xFFE1E2EC)
-                                        ),
-                                        shape = RoundedCornerShape(20.dp)
-                                    )
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f).padding(end = 8.dp)
+                            if (simCardList.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(bentoBg)
+                                        .border(BorderStroke(1.dp, Color(0xFFE1E2EC)), RoundedCornerShape(20.dp))
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(CircleShape)
-                                            .background(if (isSimActive) Color(0xFF2EBD59) else Color(0xFFB0BEC5)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "2",
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 15.sp
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.width(12.dp))
-
-                                    Column {
-                                        Text(
-                                            text = if (isSimInserted) "副卡 2 (${secondarySim?.displayName ?: "SIM 2"})" else "副卡 2 (Slot 2)",
-                                            color = bentoTextDark,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = when {
-                                                !isSimInserted -> "检测状态: 未检测到已插卡 (控制开关失效)"
-                                                isSimActive -> "运行中 | 系统拨号与短信已配置为主动询问"
-                                                else -> "已检测到插卡且未启用 | 按钮生效，点击可一键重载配置并启用"
-                                            },
-                                            color = bentoTextSecondary,
-                                            fontSize = 11.sp
-                                        )
-                                    }
-                                }
-
-                                if (toggleLoading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(24.dp),
-                                        color = activeColor,
-                                        strokeWidth = 2.dp
+                                    Text(
+                                        text = "未检测到任何已插入的 SIM 卡",
+                                        color = bentoTextSecondary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium
                                     )
-                                } else {
-                                    Switch(
-                                        checked = isSimActive,
-                                        enabled = isSimInserted,
-                                        onCheckedChange = { checked ->
-                                            if (secondarySim != null) {
+                                }
+                            }
+
+                            simCardList.forEachIndexed { index, simInfo ->
+                                var toggleLoading by remember(simInfo.subId) { mutableStateOf(false) }
+
+                                val isSimInserted = true
+                                val isSimActive = simInfo.isActive
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(if (isSimActive) Color(0xFFE8F5E9) else bentoBg)
+                                        .border(
+                                            BorderStroke(
+                                                width = 1.dp,
+                                                color = if (isSimActive) Color(0xFFC8E6C9) else Color(0xFFE1E2EC)
+                                            ),
+                                            shape = RoundedCornerShape(20.dp)
+                                        )
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f).padding(end = 8.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isSimActive) Color(0xFF2EBD59) else Color(0xFFB0BEC5)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "${simInfo.slotIndex + 1}",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 15.sp
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                        Column {
+                                            Text(
+                                                text = "SIM ${simInfo.slotIndex + 1} (${simInfo.displayName})",
+                                                color = bentoTextDark,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = if (isSimActive) {
+                                                    "运行中 | 状态良好"
+                                                } else {
+                                                    "已休眠 | 点击右侧开关以启用"
+                                                },
+                                                color = bentoTextSecondary,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+
+                                    if (toggleLoading) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            color = activeColor,
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Switch(
+                                            checked = isSimActive,
+                                            enabled = isSimInserted,
+                                            onCheckedChange = { checked ->
                                                 toggleLoading = true
                                                 coroutineScope.launch(Dispatchers.IO) {
-                                                    val success = ControlManager.setSubscriptionEnabled(context, secondarySim.subId, checked)
+                                                    val success = ControlManager.setSubscriptionEnabled(context, simInfo.subId, checked)
                                                     
                                                     if (success) {
-                                                        if (checked) {
-                                                            ControlManager.setDefaultSimsToAsk()
-                                                        }
                                                         delay(1500)
                                                     }
                                                     
@@ -767,56 +769,26 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                                         refreshSimList()
                                                         if (success) {
                                                             if (checked) {
-                                                                Toast.makeText(context, "副卡 ${secondarySim.displayName} 已开启，默认拨号/短信已配置为系统级主动质询询问机制！", Toast.LENGTH_LONG).show()
+                                                                Toast.makeText(context, "${simInfo.displayName} 已开启！", Toast.LENGTH_SHORT).show()
                                                             } else {
-                                                                Toast.makeText(context, "副卡 ${secondarySim.displayName} 已成功休眠关闭！", Toast.LENGTH_SHORT).show()
+                                                                Toast.makeText(context, "${simInfo.displayName} 已成功休眠关闭！", Toast.LENGTH_SHORT).show()
                                                             }
                                                         } else {
-                                                            val errMsg = ControlManager.lastSetSubscriptionError
-                                                            Toast.makeText(context, "切换状态失败，请查看页面底部详细信息", Toast.LENGTH_LONG).show()
+                                                            Toast.makeText(context, "切换状态失败，请重试", Toast.LENGTH_LONG).show()
                                                         }
                                                     }
                                                 }
-                                            }
-                                        },
-                                        colors = SwitchDefaults.colors(
-                                            checkedThumbColor = Color.White,
-                                            checkedTrackColor = Color(0xFF2EBD59),
-                                            uncheckedThumbColor = Color(0xFF74777F),
-                                            uncheckedTrackColor = Color(0xFFE1E2EC),
-                                            disabledCheckedThumbColor = Color.White.copy(alpha = 0.5f),
-                                            disabledCheckedTrackColor = Color(0xFF2EBD59).copy(alpha = 0.4f),
-                                            disabledUncheckedThumbColor = Color(0xFF74777F).copy(alpha = 0.5f),
-                                            disabledUncheckedTrackColor = Color(0xFFE1E2EC).copy(alpha = 0.4f)
-                                        )
-                                    )
-                                }
-                            }
-
-                            // Primary Resident Card Info (Always Active)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFFF3F4F6))
-                                    .padding(12.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("📌", fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = "主卡 (SIM 1): ${mainSim?.displayName ?: "未检测到或读取中"}",
-                                            color = bentoTextDark,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "系统常驻运行状态（默认提供移动数据，免除拨号与短信质询弹窗）",
-                                            color = bentoTextSecondary,
-                                            fontSize = 11.sp
+                                            },
+                                            colors = SwitchDefaults.colors(
+                                                checkedThumbColor = Color.White,
+                                                checkedTrackColor = Color(0xFF2EBD59),
+                                                uncheckedThumbColor = Color(0xFF74777F),
+                                                uncheckedTrackColor = Color(0xFFE1E2EC),
+                                                disabledCheckedThumbColor = Color.White.copy(alpha = 0.5f),
+                                                disabledCheckedTrackColor = Color(0xFF2EBD59).copy(alpha = 0.4f),
+                                                disabledUncheckedThumbColor = Color(0xFF74777F).copy(alpha = 0.5f),
+                                                disabledUncheckedTrackColor = Color(0xFFE1E2EC).copy(alpha = 0.4f)
+                                            )
                                         )
                                     }
                                 }

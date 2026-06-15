@@ -149,10 +149,7 @@ class ScreenStateService : Service() {
                     val pendingResult = goAsync()
                     Thread {
                         try {
-                            val isUsbConnected = isUsbConnectedToComputer(context)
-                            val isTetheringConfigured = isUsbTetheringConfigured(context)
-                            
-                            Log.d(TAG, "Receiver event action: $action, isUsbConnected: $isUsbConnected, isTetheringConfigured: $isTetheringConfigured")
+                            Log.d(TAG, "Receiver event action: $action")
 
                             when (action) {
                                 Intent.ACTION_SCREEN_ON -> {

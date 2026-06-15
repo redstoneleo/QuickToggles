@@ -337,56 +337,58 @@ object ControlManager {
         try {
             val subscriptionManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager ?: return emptyList()
             
-            val activeList = try {
-                subscriptionManager.activeSubscriptionInfoList ?: emptyList()
-            } catch (e: SecurityException) {
-                emptyList()
-            }
-            val allList = try {
-                subscriptionManager.allSubscriptionInfoList ?: emptyList()
-            } catch (e: SecurityException) {
-                emptyList()
-            }
-
-            val processedSubIds = mutableSetOf<Int>()
-
-            for (info in activeList) {
-                if (info.simSlotIndex in 0..1) {
-                    list.add(
-                        SimInfo(
-                            subId = info.subscriptionId,
-                            slotIndex = info.simSlotIndex,
-                            displayName = info.displayName?.toString() ?: "SIM ${info.simSlotIndex + 1}",
-                            isActive = true,
-                            isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.isEmbedded else false,
-                            number = info.number ?: ""
-                        )
-                    )
-                    processedSubIds.add(info.subscriptionId)
-                }
-            }
-
-            for (info in allList) {
-                if (info.subscriptionId !in processedSubIds) {
-                    val finalSlotIndex = if (info.simSlotIndex >= 0) info.simSlotIndex else {
-                        if (list.any { it.slotIndex == 0 }) 1 else 0
+                    // Get active SIMs
+                    val activeList = try {
+                        subscriptionManager.activeSubscriptionInfoList ?: emptyList()
+                    } catch (e: SecurityException) {
+                        emptyList()
                     }
-                    if (finalSlotIndex in 0..1) {
-                        list.add(
-                            SimInfo(
-                                subId = info.subscriptionId,
-                                slotIndex = finalSlotIndex,
-                                displayName = info.displayName?.toString() ?: "SIM ${finalSlotIndex + 1}",
-                                isActive = false,
-                                isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.isEmbedded else false,
-                                number = info.number ?: ""
+                    val allList = try {
+                        subscriptionManager.allSubscriptionInfoList ?: emptyList()
+                    } catch (e: SecurityException) {
+                        emptyList()
+                    }
+
+                    val processedSubIds = mutableSetOf<Int>()
+
+                    // 1. Add explicitly active SIMs mapped to 0 or 1
+                    for (info in activeList) {
+                        if (info.simSlotIndex in 0..1) {
+                            list.add(
+                                SimInfo(
+                                    subId = info.subscriptionId,
+                                    slotIndex = info.simSlotIndex,
+                                    displayName = info.displayName?.toString() ?: "SIM ${info.simSlotIndex + 1}",
+                                    isActive = true,
+                                    isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.isEmbedded else false,
+                                    number = info.number ?: ""
+                                )
                             )
-                        )
-                        processedSubIds.add(info.subscriptionId)
+                            processedSubIds.add(info.subscriptionId)
+                        }
                     }
-                }
-            }
-        } catch (e: Exception) {
+
+                    // 2. For inactive SIMs, rely strictly on their reported slotIndex being 0 or 1
+                    // Removed SIMs have a slotIndex of -1 (INVALID_SIM_SLOT_INDEX)
+                    for (info in allList) {
+                        if (list.size >= 2) break
+                        if (info.subscriptionId !in processedSubIds) {
+                            if (info.simSlotIndex in 0..1 && list.none { it.slotIndex == info.simSlotIndex }) {
+                                list.add(
+                                    SimInfo(
+                                        subId = info.subscriptionId,
+                                        slotIndex = info.simSlotIndex,
+                                        displayName = info.displayName?.toString() ?: "SIM ${info.simSlotIndex + 1}",
+                                        isActive = false,
+                                        isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.isEmbedded else false,
+                                        number = info.number ?: ""
+                                    )
+                                )
+                                processedSubIds.add(info.subscriptionId)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch getSimCardList: ${e.message}")
         }
 
@@ -453,18 +455,15 @@ object ControlManager {
                     for (record in rootSims) {
                         if (list.size >= 2) break // Allow max 2 SIMs
                         
-                        if (list.none { it.subId == record.subId }) {
-                            val finalSlotIndex = if (record.slotIndex >= 0) record.slotIndex else {
-                                if (list.any { it.slotIndex == 0 }) 1 else 0
-                            }
-                            
-                            // Only add if we don't already have a SIM in this guessed slot, or force it strictly if needed
-                            if (list.none { it.slotIndex == finalSlotIndex }) {
+                        // Just rely on the root DB's slot_index. If it's 0 or 1, it's currently inserted.
+                        // Android sets slot_index to -1 when a SIM is physically removed.
+                        if (list.none { it.subId == record.subId } && record.slotIndex in 0..1) {
+                            if (list.none { it.slotIndex == record.slotIndex }) {
                                 list.add(
                                     SimInfo(
                                         subId = record.subId,
-                                        slotIndex = finalSlotIndex,
-                                        displayName = if (record.displayName.isNotEmpty()) record.displayName else "SIM (Sub ${record.subId})",
+                                        slotIndex = record.slotIndex,
+                                        displayName = if (record.displayName.isNotEmpty()) record.displayName else "SIM ${record.slotIndex + 1}",
                                         isActive = record.isActiveRoot,
                                         isEmbedded = false,
                                         number = record.number
@@ -513,6 +512,14 @@ object ControlManager {
             if (activeSims.size == 1) {
                 remainingSubId = activeSims[0].subId
             }
+        } else {
+            // Aggressive database preset for new SIM enablement:
+            // When enabling a potentially inactive/new SIM, make it visible to the OS first
+            val cols = listOf("uicc_applications_enabled", "is_active", "sim_status", "sub_state")
+            for (col in cols) {
+                ShellUtils.runCommand("content update --uri content://telephony/siminfo --bind $col:i:1 --where \"_id=$subId\"", useRoot = true)
+            }
+            ShellUtils.runCommand("am broadcast -a android.intent.action.ACTION_SUBINFO_RECORD_UPDATED", useRoot = true)
         }
 
         // 1. Try app_process root java api

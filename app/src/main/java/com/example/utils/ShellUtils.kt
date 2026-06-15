@@ -8,6 +8,11 @@ import java.io.InputStreamReader
 object ShellUtils {
     private const val TAG = "ShellUtils"
 
+    private val lock = Any()
+    private var rootProcess: Process? = null
+    private var rootOs: DataOutputStream? = null
+    private var rootReader: BufferedReader? = null
+
     fun isRootAvailable(): Boolean {
         var process: Process? = null
         var os: DataOutputStream? = null
@@ -31,11 +36,81 @@ object ShellUtils {
         }
     }
 
+    private fun initRootProcess() {
+        if (rootProcess != null) return
+        try {
+            val pb = ProcessBuilder("su")
+            pb.redirectErrorStream(true)
+            val p = pb.start()
+            rootProcess = p
+            rootOs = DataOutputStream(p.outputStream)
+            rootReader = BufferedReader(InputStreamReader(p.inputStream))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start persistent root shell", e)
+            closeRootProcess()
+        }
+    }
+
+    private fun closeRootProcess() {
+        try { rootOs?.close() } catch (e: Exception) {}
+        try { rootReader?.close() } catch (e: Exception) {}
+        try { rootProcess?.destroy() } catch (e: Exception) {}
+        rootProcess = null
+        rootOs = null
+        rootReader = null
+    }
+
     fun runCommand(cmd: String, useRoot: Boolean = true): CommandResult {
-        return runCommands(listOf(cmd), useRoot)
+        if (!useRoot) {
+            return runCommandsInternal(listOf(cmd), false)
+        }
+
+        synchronized(lock) {
+            initRootProcess()
+            if (rootProcess == null || rootOs == null || rootReader == null) {
+                return CommandResult(-1, "", "Failed to start root shell")
+            }
+
+            val outputMsg = StringBuilder()
+            try {
+                rootOs!!.writeBytes("$cmd\n")
+                rootOs!!.writeBytes("echo \"===AISTUDIO_CMD_END===: $?\"\n")
+                rootOs!!.flush()
+
+                var exitCode = 0
+                while (true) {
+                    val line = rootReader!!.readLine()
+                    if (line == null) {
+                        // Process died
+                        closeRootProcess()
+                        return CommandResult(-1, outputMsg.toString().trim(), "Root shell died")
+                    }
+                    if (line.startsWith("===AISTUDIO_CMD_END===: ")) {
+                        exitCode = line.substringAfter("===AISTUDIO_CMD_END===: ").trim().toIntOrNull() ?: 0
+                        break
+                    }
+                    if (line != "===AISTUDIO_CMD_END===:") {
+                        outputMsg.append(line).append("\n")
+                    }
+                }
+                return CommandResult(exitCode, outputMsg.toString().trim(), "")
+            } catch (e: Exception) {
+                Log.e(TAG, "Persistent root command execution failed: ${e.message}")
+                closeRootProcess()
+                return CommandResult(-1, "", e.message ?: "Unknown error")
+            }
+        }
     }
 
     fun runCommands(cmds: List<String>, useRoot: Boolean = true): CommandResult {
+        if (useRoot) {
+            val combinedCmd = cmds.joinToString("\n")
+            return runCommand(combinedCmd, true)
+        }
+        return runCommandsInternal(cmds, false)
+    }
+
+    private fun runCommandsInternal(cmds: List<String>, useRoot: Boolean = true): CommandResult {
         var process: Process? = null
         var os: DataOutputStream? = null
         var reader: BufferedReader? = null
