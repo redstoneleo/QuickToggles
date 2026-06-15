@@ -353,101 +353,184 @@ object ControlManager {
     // --- SIM CARD MANAGEMENT ---
     fun getSimCardList(context: Context): List<SimInfo> {
         val list = mutableListOf<SimInfo>()
+        val processedSubIds = mutableSetOf<Int>()
+
+        data class RootSimRecord(
+            val subId: Int, 
+            val slotIndex: Int, 
+            val displayName: String, 
+            val number: String, 
+            val isActiveRoot: Boolean,
+            val hasValidIccId: Boolean
+        )
+        val rootSims = mutableMapOf<Int, RootSimRecord>() // slotIndex -> RootSimRecord
+
+        // 1. Read ALL siminfo from root first (One single query)
+        try {
+            val rootResult = ShellUtils.runCommand("content query --uri content://telephony/siminfo", useRoot = true, timeoutMs = 4000L)
+            if (rootResult.isSuccess && rootResult.stdout.isNotEmpty()) {
+                for (line in rootResult.stdout.lines()) {
+                    val t = line.trim()
+                    if (!t.startsWith("Row:")) continue
+                    val parts = t.substringAfter("Row:").split(",")
+                    
+                    var subId = -1
+                    var slotIndex = -1
+                    var displayName = ""
+                    var carrierName = ""
+                    var number = ""
+                    var isActiveRoot = false
+                    var uiccApplicationsEnabled: Int? = null
+                    var fallbackActiveState = false
+                    var hasValidIccId = false
+                    
+                    for (part in parts) {
+                        val p = part.trim()
+                        if (!p.contains("=")) continue
+                        val key = p.substringBefore("=").trim().lowercase()
+                        val value = p.substringAfter("=").trim().trim('"')
+                        
+                        when (key) {
+                            "_id", "subscription_id", "sub_id", "sim_id" -> subId = value.toIntOrNull() ?: subId
+                            "slot_index", "phone_id", "sim_slot_index", "sim_slot", "slot", "simslotindex", "simslot" -> slotIndex = value.toIntOrNull() ?: slotIndex
+                            "display_name", "name" -> displayName = value
+                            "carrier_name", "carrier" -> carrierName = value
+                            "number", "address" -> number = value
+                            "uicc_applications_enabled" -> uiccApplicationsEnabled = value.toIntOrNull()
+                            "is_active", "isactive", "active", "sub_state", "sim_status", "subscription_status" -> {
+                                fallbackActiveState = (value == "1" || value.equals("true", true))
+                            }
+                            "icc_id", "iccid", "card_id" -> {
+                                if (value.isNotEmpty() && value != "null" && value != "0") {
+                                    hasValidIccId = true
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (displayName.isEmpty() || displayName == "null" || displayName.startsWith("CARD ", ignoreCase = true) || displayName.startsWith("SIM ", ignoreCase = true)) {
+                        if (carrierName.isNotEmpty() && carrierName != "null") {
+                            displayName = carrierName
+                        }
+                    }
+                    
+                    isActiveRoot = if (uiccApplicationsEnabled != null) {
+                        uiccApplicationsEnabled == 1
+                    } else {
+                        fallbackActiveState
+                    }
+                    
+                    if (subId != -1 && slotIndex >= 0) {
+                        // Sometimes there are multiple rows for one slot, we prefer active ones or newer ones
+                        val existing = rootSims[slotIndex]
+                        if (existing == null || (!existing.isActiveRoot && isActiveRoot) || (existing.subId < subId && existing.isActiveRoot == isActiveRoot)) {
+                            rootSims[slotIndex] = RootSimRecord(subId, slotIndex, displayName, number, isActiveRoot, hasValidIccId)
+                        }
+                    }
+                }
+            }
+        } catch (ex: Exception) {
+            Log.e(TAG, "Root SIM info fetch failed: ${ex.message}")
+        }
+
+        // 2. Fetch system SubscriptionManager data
         try {
             val subscriptionManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
                 ?: return emptyList()
             val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
 
             val phoneCount = try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    telephonyManager?.activeModemCount ?: 1
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    telephonyManager?.phoneCount ?: 1
-                } else {
-                    1
-                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) telephonyManager?.activeModemCount ?: 1
+                else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) telephonyManager?.phoneCount ?: 1
+                else 1
             } catch (e: Exception) { 1 }
 
-            val processedSubIds = mutableSetOf<Int>()
+            val allList = try { subscriptionManager.allSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
+            val activeList = try { subscriptionManager.activeSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
 
             for (slot in 0 until phoneCount) {
-                try {
-                    val infoForSlot = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        try {
-                            subscriptionManager.getActiveSubscriptionInfoForSimSlotIndex(slot)
-                        } catch (e: Exception) { null }
+                // Try to get info directly for slot
+                var infoForSlot = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try { subscriptionManager.getActiveSubscriptionInfoForSimSlotIndex(slot) } catch (e: Exception) { null }
+                } else {
+                    try {
+                        subscriptionManager.javaClass.getMethod("getActiveSubscriptionInfoForSimSlotIndex", Int::class.javaPrimitiveType)
+                            .invoke(subscriptionManager, slot) as? SubscriptionInfo
+                    } catch (e: Exception) { null }
+                }
+
+                if (infoForSlot == null) {
+                    infoForSlot = activeList.firstOrNull { it.simSlotIndex == slot }
+                }
+
+                val rootRec = rootSims[slot]
+
+                if (infoForSlot != null) {
+                    // It's definitely active and inserted
+                    val name = if (rootRec != null && isValidName(rootRec.displayName)) {
+                        rootRec.displayName
                     } else {
-                        try {
-                            subscriptionManager.javaClass.getMethod("getActiveSubscriptionInfoForSimSlotIndex", Int::class.javaPrimitiveType)
-                                .invoke(subscriptionManager, slot) as? SubscriptionInfo
-                        } catch (e: Exception) { null }
+                        infoForSlot.displayName?.toString() ?: "SIM ${slot + 1}"
                     }
-
-                    if (infoForSlot != null) {
-                        list.add(
-                            SimInfo(
-                                subId = infoForSlot.subscriptionId,
-                                slotIndex = slot,
-                                displayName = infoForSlot.displayName?.toString() ?: "SIM ${slot + 1}",
-                                isActive = true,
-                                isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) infoForSlot.isEmbedded else false,
-                                number = infoForSlot.number ?: ""
-                            )
+                    
+                    list.add(
+                        SimInfo(
+                            subId = infoForSlot.subscriptionId,
+                            slotIndex = slot,
+                            displayName = name,
+                            isActive = true,
+                            isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) infoForSlot.isEmbedded else false,
+                            number = infoForSlot.number ?: ""
                         )
-                        processedSubIds.add(infoForSlot.subscriptionId)
-                        continue
-                    }
+                    )
+                    processedSubIds.add(infoForSlot.subscriptionId)
+                } else {
+                    // Check if it's inserted (using TelephonyManager OR Root DB)
+                    val isPhysicallyInserted = isSimSlotInserted(context, slot)
+                    val isRootInserted = rootRec?.hasValidIccId == true
 
-                    if (isSimSlotInserted(context, slot)) {
-                        val allList = try { subscriptionManager.allSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
-                        var match = allList.filter { it.simSlotIndex == slot && it.subscriptionId !in processedSubIds }
-                            .maxByOrNull { it.subscriptionId }
-                        
-                        // Fallback: disabled SIMs might have simSlotIndex == -1 in allList, check via Root DB
-                        if (match == null) {
-                            val candidates = allList.filter { it.simSlotIndex == -1 && it.subscriptionId !in processedSubIds }
-                            for (candidate in candidates) {
-                                val rootResult = ShellUtils.runCommand(
-                                    "content query --uri content://telephony/siminfo --where \"_id=${candidate.subscriptionId}\"",
-                                    useRoot = true
-                                )
-                                var rootSlot = -1
-                                if (rootResult.isSuccess && rootResult.stdout.isNotEmpty()) {
-                                    val rowPart = rootResult.stdout.substringAfter("Row:", "").substringBefore("\n")
-                                    val parts = rowPart.split(",")
-                                    for (part in parts) {
-                                        val p = part.trim()
-                                        if (!p.contains("=")) continue
-                                        val key = p.substringBefore("=").trim().lowercase()
-                                        val value = p.substringAfter("=").trim().trim('"')
-                                        if (key in listOf("slot_index", "phone_id", "sim_slot_index", "sim_slot", "slot", "simslotindex", "sim_id")) {
-                                            val t = value.toIntOrNull()
-                                            if (t != null && t >= 0) {
-                                                rootSlot = t
-                                            }
-                                        }
-                                    }
-                                }
-                                if (rootSlot == slot) {
-                                    match = candidate
-                                    break
-                                }
-                            }
+                    if (isPhysicallyInserted || isRootInserted) {
+                        // Find match in allList
+                        var match = allList.firstOrNull { it.simSlotIndex == slot }
+                        if (match == null && rootRec != null) {
+                            match = allList.firstOrNull { it.subscriptionId == rootRec.subId }
                         }
 
                         if (match != null) {
+                            val name = if (rootRec != null && isValidName(rootRec.displayName)) {
+                                rootRec.displayName
+                            } else {
+                                match.displayName?.toString() ?: "SIM ${slot + 1}"
+                            }
+                            
+                            var isActive = rootRec?.isActiveRoot ?: false
+
                             list.add(
                                 SimInfo(
                                     subId = match.subscriptionId,
                                     slotIndex = slot,
-                                    displayName = match.displayName?.toString() ?: "SIM ${slot + 1}",
-                                    isActive = false,
+                                    displayName = name,
+                                    isActive = isActive,
                                     isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) match.isEmbedded else false,
                                     number = match.number ?: ""
                                 )
                             )
                             processedSubIds.add(match.subscriptionId)
+                        } else if (rootRec != null) {
+                            // Rely entirely on Root DB parsing
+                            list.add(
+                                SimInfo(
+                                    subId = rootRec.subId,
+                                    slotIndex = slot,
+                                    displayName = if (isValidName(rootRec.displayName)) rootRec.displayName else "SIM ${slot + 1}",
+                                    isActive = rootRec.isActiveRoot,
+                                    isEmbedded = false,
+                                    number = rootRec.number
+                                )
+                            )
+                            processedSubIds.add(rootRec.subId)
                         } else {
+                            // Fallback placeholder
                             list.add(
                                 SimInfo(
                                     subId = -1,
@@ -460,126 +543,20 @@ object ControlManager {
                             )
                         }
                     }
-                } catch (ignore: Exception) {}
-            }
-
-            if (list.isEmpty()) {
-                val activeList = try { subscriptionManager.activeSubscriptionInfoList ?: emptyList() } catch (e: SecurityException) { emptyList() }
-                for (info in activeList) {
-                    if (info.simSlotIndex in 0..1 && list.none { it.slotIndex == info.simSlotIndex }) {
-                        list.add(
-                            SimInfo(
-                                subId = info.subscriptionId,
-                                slotIndex = info.simSlotIndex,
-                                displayName = info.displayName?.toString() ?: "SIM ${info.simSlotIndex + 1}",
-                                isActive = true,
-                                isEmbedded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.isEmbedded else false,
-                                number = info.number ?: ""
-                            )
-                        )
-                        processedSubIds.add(info.subscriptionId)
-                    }
                 }
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch getSimCardList: ${e.message}")
-        }
-
-        try {
-            val rootResult = ShellUtils.runCommand("content query --uri content://telephony/siminfo", useRoot = true)
-            if (rootResult.isSuccess && rootResult.stdout.isNotEmpty()) {
-                val rootLines = rootResult.stdout.lines()
-                data class RootSimRecord(val subId: Int, val slotIndex: Int, val displayName: String, val number: String, val isActiveRoot: Boolean)
-                val rootSims = mutableListOf<RootSimRecord>()
-                for (line in rootLines) {
-                    val t = line.trim()
-                    if (!t.startsWith("Row:")) continue
-                    val parts = t.substringAfter("Row:").split(",")
-                    var subId = -1
-                    var slotIndex = -1
-                    var displayName = ""
-                    var carrierName = ""
-                    var number = ""
-                    var isActiveRoot = false
-                    for (part in parts) {
-                        val p = part.trim()
-                        if (!p.contains("=")) continue
-                        val key = p.substringBefore("=").trim().lowercase()
-                        var value = p.substringAfter("=").trim().trim('"')
-                        when (key) {
-                            "_id", "subscription_id", "sub_id", "sim_id" -> subId = value.toIntOrNull() ?: subId
-                            "slot_index", "phone_id", "sim_slot_index", "sim_slot", "slot" -> slotIndex = value.toIntOrNull() ?: slotIndex
-                            "simslotindex", "simslot" -> slotIndex = value.toIntOrNull() ?: slotIndex
-                            "display_name", "name" -> displayName = value
-                            "carrier_name", "carrier" -> carrierName = value
-                            "number", "address" -> number = value
-                            "is_active", "isactive", "active", "sub_state", "sim_status", "subscription_status" -> {
-                                isActiveRoot = (value == "1" || value.equals("true", true))
-                            }
-                        }
-                    }
-                    if (displayName.isEmpty() || displayName == "null" || displayName.startsWith("CARD ", ignoreCase = true) || displayName.startsWith("SIM ", ignoreCase = true)) {
-                        if (carrierName.isNotEmpty() && carrierName != "null") {
-                            displayName = carrierName
-                        }
-                    }
-                    if (subId != -1) {
-                        rootSims.add(RootSimRecord(subId, slotIndex, displayName, number, isActiveRoot))
-                    }
-                }
-                rootSims.sortWith(compareBy({ it.slotIndex }, { -it.subId }))
-                for (rec in rootSims) {
-                    val existing = list.firstOrNull { it.slotIndex == rec.slotIndex && rec.slotIndex >= 0 }
-                    if (existing != null) {
-                        var newSubId = existing.subId
-                        var newIsActive = existing.isActive
-                        var newDisplayName = existing.displayName
-
-                        if (existing.subId == -1 && rec.subId != -1) {
-                            newSubId = rec.subId
-                            newIsActive = rec.isActiveRoot
-                        }
-
-                        // Bugfix Requirement: Always prioritize Root DB displayName for inactive SIMs,
-                        // or if the root DB provides a valid non-placeholder name.
-                        val isRootNameValid = rec.displayName.isNotEmpty() && rec.displayName != "null" &&
-                                              !rec.displayName.startsWith("SIM ", ignoreCase = true) &&
-                                              !rec.displayName.startsWith("CARD ", ignoreCase = true)
-
-                        if (!existing.isActive && rec.displayName.isNotEmpty() && rec.displayName != "null") {
-                            newDisplayName = rec.displayName
-                        } else if (isRootNameValid && (existing.displayName.isEmpty() || existing.displayName.startsWith("SIM ", ignoreCase = true) || existing.displayName.startsWith("CARD ", ignoreCase = true))) {
-                            newDisplayName = rec.displayName
-                        }
-
-                        val index = list.indexOf(existing)
-                        list[index] = existing.copy(
-                            subId = newSubId,
-                            isActive = newIsActive,
-                            displayName = newDisplayName
-                        )
-                        continue
-                    }
-                    if (rec.slotIndex in 0..10 && isSimSlotInserted(context, rec.slotIndex)) {
-                        list.add(
-                            SimInfo(
-                                subId = rec.subId,
-                                slotIndex = rec.slotIndex,
-                                displayName = if (rec.displayName.isNotEmpty()) rec.displayName else "SIM ${rec.slotIndex + 1}",
-                                isActive = rec.isActiveRoot,
-                                isEmbedded = false,
-                                number = rec.number
-                            )
-                        )
-                    }
-                }
-            }
-        } catch (ex: Exception) {
-            Log.e(TAG, "Root SIM info fallback failed: ${ex.message}")
+            Log.e(TAG, "Failed to fetch getSimCardList from Context: ${e.message}")
         }
 
         return list.sortedBy { it.slotIndex }
+    }
+
+    private fun isValidName(name: String): Boolean {
+        return name.isNotEmpty() && name != "null" &&
+               !name.startsWith("SIM ", ignoreCase = true) &&
+               !name.startsWith("CARD ", ignoreCase = true)
     }
 
     var lastSetSubscriptionError = ""

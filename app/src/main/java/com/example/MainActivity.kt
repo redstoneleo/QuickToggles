@@ -227,7 +227,6 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     LaunchedEffect(Unit) {
         while (true) {
             probeHardwareStates()
-            refreshSimList()
             delay(2000)
         }
     }

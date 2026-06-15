@@ -60,7 +60,7 @@ object ShellUtils {
         rootReader = null
     }
 
-    fun runCommand(cmd: String, useRoot: Boolean = true): CommandResult {
+    fun runCommand(cmd: String, useRoot: Boolean = true, timeoutMs: Long? = 5000L): CommandResult {
         if (!useRoot) {
             return runCommandsInternal(listOf(cmd), false)
         }
@@ -78,21 +78,40 @@ object ShellUtils {
                 rootOs!!.flush()
 
                 var exitCode = 0
-                while (true) {
-                    val line = rootReader!!.readLine()
-                    if (line == null) {
-                        // Process died
+                val future = java.util.concurrent.Executors.newSingleThreadExecutor().submit(java.util.concurrent.Callable {
+                    while (true) {
+                        val line = rootReader!!.readLine()
+                        if (line == null) {
+                            return@Callable -2 // died
+                        }
+                        if (line.startsWith("===AISTUDIO_CMD_END===: ")) {
+                            exitCode = line.substringAfter("===AISTUDIO_CMD_END===: ").trim().toIntOrNull() ?: 0
+                            return@Callable exitCode
+                        }
+                        if (line != "===AISTUDIO_CMD_END===:") {
+                            outputMsg.append(line).append("\n")
+                        }
+                    }
+                    return@Callable -1
+                })
+
+                val res = if (timeoutMs != null) {
+                    try {
+                        future.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    } catch (e: java.util.concurrent.TimeoutException) {
+                        future.cancel(true)
                         closeRootProcess()
-                        return CommandResult(-1, outputMsg.toString().trim(), "Root shell died")
+                        return CommandResult(-1, outputMsg.toString().trim(), "Root shell timed out after $timeoutMs ms")
                     }
-                    if (line.startsWith("===AISTUDIO_CMD_END===: ")) {
-                        exitCode = line.substringAfter("===AISTUDIO_CMD_END===: ").trim().toIntOrNull() ?: 0
-                        break
-                    }
-                    if (line != "===AISTUDIO_CMD_END===:") {
-                        outputMsg.append(line).append("\n")
-                    }
+                } else {
+                    future.get()
                 }
+
+                if (res == -2) {
+                    closeRootProcess()
+                    return CommandResult(-1, outputMsg.toString().trim(), "Root shell died")
+                }
+
                 return CommandResult(exitCode, outputMsg.toString().trim(), "")
             } catch (e: Exception) {
                 Log.e(TAG, "Persistent root command execution failed: ${e.message}")
@@ -102,10 +121,10 @@ object ShellUtils {
         }
     }
 
-    fun runCommands(cmds: List<String>, useRoot: Boolean = true): CommandResult {
+    fun runCommands(cmds: List<String>, useRoot: Boolean = true, timeoutMs: Long? = 5000L): CommandResult {
         if (useRoot) {
             val combinedCmd = cmds.joinToString("\n")
-            return runCommand(combinedCmd, true)
+            return runCommand(combinedCmd, true, timeoutMs)
         }
         return runCommandsInternal(cmds, false)
     }
