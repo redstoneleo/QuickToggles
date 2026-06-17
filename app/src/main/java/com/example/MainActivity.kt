@@ -47,6 +47,7 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.utils.ControlManager
 import com.example.utils.PrefsManager
 import com.example.utils.ShellUtils
+import com.example.utils.ShizukuHelper
 import com.example.widget.QuickControlWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -67,7 +68,8 @@ class MainActivity : ComponentActivity() {
         val isAutoData = PrefsManager.isAutoDataToggleEnabled(this)
         val isFlashlightCtrl = PrefsManager.isFlashlightPowerControlEnabled(this)
         val isUsb5g = PrefsManager.isUsb5gToggleEnabled(this)
-        if (isAutoData || isFlashlightCtrl || isUsb5g) {
+        val isAutoUsbTethering = PrefsManager.isAutoUsbTetheringEnabled(this)
+        if (isAutoData || isFlashlightCtrl || isUsb5g || isAutoUsbTethering) {
             val serviceIntent = Intent(this, ScreenStateService::class.java)
             try {
                 ContextCompat.startForegroundService(this, serviceIntent)
@@ -116,6 +118,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     // 1. Root & Live Hardware States
     var isRootAvailable by remember { mutableStateOf(false) }
     var checkingRoot by remember { mutableStateOf(false) }
+    var isShizukuAvailable by remember { mutableStateOf(ShizukuHelper.isShizukuAvailable()) }
 
     var isDataEnabled by remember { mutableStateOf(false) }
     var isWifiEnabled by remember { mutableStateOf(false) }
@@ -192,6 +195,8 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
 
     // Syncing probe with transition locks
     fun probeHardwareStates() {
+        isShizukuAvailable = ShizukuHelper.isShizukuAvailable()
+        
         val now = System.currentTimeMillis()
         if (now - lastDataToggleTime > 2500) {
             isDataEnabled = ControlManager.isMobileDataEnabled(context)
@@ -910,7 +915,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                 ContextCompat.startForegroundService(context, serviceIntent)
                                 Toast.makeText(context, "熄屏/亮屏自动流量切换已启用", Toast.LENGTH_SHORT).show()
                             } else {
-                                if (!flashlightPowerControl && !usb5gToggle) {
+                                if (!flashlightPowerControl && !usb5gToggle && !sleepModeToggle && !PrefsManager.isAutoUsbTetheringEnabled(context)) {
                                     context.stopService(serviceIntent)
                                     Toast.makeText(context, "自动控制服务已停止，后台服务已关闭", Toast.LENGTH_SHORT).show()
                                 } else {
@@ -973,7 +978,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                 ContextCompat.startForegroundService(context, serviceIntent)
                                 Toast.makeText(context, "手电筒按键智能控制已启用", Toast.LENGTH_SHORT).show()
                             } else {
-                                if (!autoDataToggle && !usb5gToggle) {
+                                if (!autoDataToggle && !usb5gToggle && !sleepModeToggle && !PrefsManager.isAutoUsbTetheringEnabled(context)) {
                                     context.stopService(serviceIntent)
                                     Toast.makeText(context, "手电筒控制已停止，后台服务已关闭", Toast.LENGTH_SHORT).show()
                                 } else {
@@ -1119,7 +1124,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                 ContextCompat.startForegroundService(context, serviceIntent)
                                 Toast.makeText(context, "USB 供电智能网络切换已启用", Toast.LENGTH_SHORT).show()
                             } else {
-                                if (!autoDataToggle && !flashlightPowerControl) {
+                                if (!autoDataToggle && !flashlightPowerControl && !sleepModeToggle && !PrefsManager.isAutoUsbTetheringEnabled(context)) {
                                     context.stopService(serviceIntent)
                                     Toast.makeText(context, "自动控制服务已停止，后台服务已关闭", Toast.LENGTH_SHORT).show()
                                 } else {
@@ -1133,6 +1138,94 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                             checkedTrackColor = Color(0xFF1B5E20),
                             uncheckedThumbColor = Color(0xFF74777F),
                             uncheckedTrackColor = Color(0xFFC8E6C9)
+                        )
+                    )
+                }
+            }
+        }
+
+        // 4.5. Auto USB Tethering Block
+        item {
+            var autoUsbTetheringToggle by remember { mutableStateOf(PrefsManager.isAutoUsbTetheringEnabled(context)) }
+            Spacer(modifier = Modifier.height(16.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xFFFFF3E0)) // Light Orange
+                    .border(BorderStroke(1.dp, Color(0xFFFFCC80)), RoundedCornerShape(28.dp))
+                    .padding(20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(
+                            text = "USB 自动网络共享 (需 Shizuku)",
+                            color = Color(0xFFE65100),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "当数据线连接电脑且当前未共享网络时，借助 Shizuku 自动为您启用 USB 网络共享（RNDIS）。同时具备防线路晃动的智能断连防抖恢复机制。",
+                            color = Color(0xFFE65100).copy(alpha = 0.8f),
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
+                        if (!isShizukuAvailable) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFFFEBEE))
+                                    .clickable { 
+                                        ShizukuHelper.requestPermission(context)
+                                    }
+                                    .padding(8.dp)
+                            ) {
+                                Text(
+                                    text = "⚠️ 未检测到 Shizuku 或未授权，点击此处尝试请求授权",
+                                    color = Color.Red,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "✅ Shizuku 已授权",
+                                color = Color(0xFF2EBD59),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Switch(
+                        checked = autoUsbTetheringToggle,
+                        onCheckedChange = { checked ->
+                            autoUsbTetheringToggle = checked
+                            PrefsManager.setAutoUsbTetheringEnabled(context, checked)
+
+                            val serviceIntent = Intent(context, ScreenStateService::class.java)
+                            if (checked) {
+                                ContextCompat.startForegroundService(context, serviceIntent)
+                                Toast.makeText(context, "USB 自动网络共享已启用", Toast.LENGTH_SHORT).show()
+                            } else {
+                                if (!autoDataToggle && !flashlightPowerControl && !usb5gToggle && !sleepModeToggle) {
+                                    context.stopService(serviceIntent)
+                                }
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFFE65100),
+                            uncheckedThumbColor = Color(0xFF74777F),
+                            uncheckedTrackColor = Color(0xFFFFE0B2)
                         )
                     )
                 }
@@ -1188,7 +1281,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                        ControlManager.setSleepModeActive(context, false)
                                     }.start()
                                     
-                                    if (!autoDataToggle && !flashlightPowerControl && !usb5gToggle) {
+                                    if (!autoDataToggle && !flashlightPowerControl && !usb5gToggle && !PrefsManager.isAutoUsbTetheringEnabled(context)) {
                                         context.stopService(serviceIntent)
                                         Toast.makeText(context, "后台服务已关闭", Toast.LENGTH_SHORT).show()
                                     } else {

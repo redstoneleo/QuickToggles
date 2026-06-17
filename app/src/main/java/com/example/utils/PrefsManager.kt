@@ -19,6 +19,17 @@ object PrefsManager {
     private const val KEY_SLEEP_END_HOUR = "sleep_end_hour"
     private const val KEY_SLEEP_END_MINUTE = "sleep_end_minute"
     private const val KEY_MANUAL_SLEEP_EXIT_TIME = "manual_sleep_exit_time"
+    private const val KEY_AUTO_USB_TETHERING = "auto_usb_tethering"
+
+    fun isAutoUsbTetheringEnabled(context: Context): Boolean {
+        val sharedPref = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return sharedPref.getBoolean(KEY_AUTO_USB_TETHERING, false)
+    }
+
+    fun setAutoUsbTetheringEnabled(context: Context, enabled: Boolean) {
+        val sharedPref = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        sharedPref.edit().putBoolean(KEY_AUTO_USB_TETHERING, enabled).apply()
+    }
 
     fun getManualSleepExitTime(context: Context): Long {
         val sharedPref = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

@@ -60,8 +60,29 @@ object RootSimTool {
             var invokedAny = false
             var errorLogs = ""
             
-            // Search for method
             val methods = isub.javaClass.methods
+            
+            // If a remaining subId is provided, set it as default for EVERYTHING before disabling
+            // to prevent the system from showing the "No default data/voice/SMS" dialog.
+            val targetDataSubId = if (args.size >= 3) args[2].toIntOrNull() ?: -1 else -1
+            if (!enable && targetDataSubId != -1) {
+                for (m in methods) {
+                    if (m.name == "setDefaultDataSubId" || m.name == "setDefaultVoiceSubId" || m.name == "setDefaultSmsSubId") {
+                        try {
+                            if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Int::class.javaPrimitiveType) {
+                                m.invoke(isub, targetDataSubId)
+                                println("Invoked ${m.name}($targetDataSubId) before disable")
+                            }
+                        } catch(e: Exception) {
+                            println("Exception invoking ${m.name}: ${e.message}")
+                        }
+                    }
+                }
+                // Sleep slightly to let the framework apply defaults before we yank the SIM
+                Thread.sleep(800)
+            }
+            
+            // Search for method
             for (m in methods) {
                 if (m.name == "setUiccApplicationsEnabled" || m.name == "setSubscriptionEnabled") {
                     try {
@@ -90,33 +111,19 @@ object RootSimTool {
             }
             
             if (invokedAny) {
-                // Set default voice and SMS to "ask every time" (-1)
-                try {
-                    for (m in methods) {
-                        if (m.name == "setDefaultVoiceSubId" || m.name == "setDefaultSmsSubId") {
-                            if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Int::class.javaPrimitiveType) {
-                                m.invoke(isub, -1)
-                                println("Invoked ${m.name}(-1)")
-                            }
-                        }
-                    }
-                } catch(e: Exception) {}
-
-                // If a remaining subId is provided, set it as default data to prevent the system dialog
-                if (args.size >= 3) {
-                    val targetDataSubId = args[2].toIntOrNull() ?: -1
-                    if (targetDataSubId != -1) {
+                // If we didn't set a default above, reset voice/SMS to -1 as a fallback?
+                // Actually, if we didn't have a remainingSubId, we might still want to clean up defaults.
+                if (targetDataSubId == -1 && !enable) {
+                    try {
                         for (m in methods) {
-                            if (m.name == "setDefaultDataSubId") {
-                                try {
-                                    if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Int::class.javaPrimitiveType) {
-                                        m.invoke(isub, targetDataSubId)
-                                        println("Invoked setDefaultDataSubId($targetDataSubId)")
-                                    }
-                                } catch(e: Exception) {}
+                            if (m.name == "setDefaultVoiceSubId" || m.name == "setDefaultSmsSubId") {
+                                if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Int::class.javaPrimitiveType) {
+                                    m.invoke(isub, -1)
+                                    println("Invoked ${m.name}(-1)")
+                                }
                             }
                         }
-                    }
+                    } catch(e: Exception) {}
                 }
                 println("SUCCESS_ROOT_API")
             } else {

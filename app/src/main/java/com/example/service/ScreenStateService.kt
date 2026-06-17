@@ -30,6 +30,7 @@ class ScreenStateService : Service() {
     private var wasFlashlightOnWhenScreenOff = false
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var usb5gRunnable: Runnable? = null
+    private var autoUsbTetheringRunnable: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -65,7 +66,8 @@ class ScreenStateService : Service() {
         val isFlashlightCtrl = PrefsManager.isFlashlightPowerControlEnabled(this)
         val isUsb5g = PrefsManager.isUsb5gToggleEnabled(this)
         val isSleepMode = PrefsManager.isSleepModeEnabled(this)
-        if (!isAutoData && !isFlashlightCtrl && !isUsb5g && !isSleepMode) {
+        val isAutoUsbTethering = PrefsManager.isAutoUsbTetheringEnabled(this)
+        if (!isAutoData && !isFlashlightCtrl && !isUsb5g && !isSleepMode && !isAutoUsbTethering) {
             Log.d(TAG, "All core background features are disabled, self stopping service")
             stopSelf()
             return START_NOT_STICKY
@@ -92,9 +94,10 @@ class ScreenStateService : Service() {
                 val isAutoData = PrefsManager.isAutoDataToggleEnabled(context)
                 val isFlashlightCtrl = PrefsManager.isFlashlightPowerControlEnabled(context)
                 val isUsb5g = PrefsManager.isUsb5gToggleEnabled(context)
+                val isAutoUsbTethering = PrefsManager.isAutoUsbTetheringEnabled(context)
                 
                 // Double check user preference to avoid doing logic if disabled
-                if (!isAutoData && !isFlashlightCtrl && !isUsb5g) {
+                if (!isAutoData && !isFlashlightCtrl && !isUsb5g && !isAutoUsbTethering) {
                     Log.d(TAG, "Receiver saw screen event but core features are disabled, stopping service.")
                     stopSelf()
                     return
@@ -168,6 +171,9 @@ class ScreenStateService : Service() {
                                 "android.hardware.usb.action.USB_STATE" -> {
                                     val isUsbTethering = isUsbTetheringConfigured(context)
                                     val isPcConnected = isUsbConnectedToComputer(context)
+                                    
+                                    handleAutoUsbTetheringCheck(context, action, isUsbTethering, isPcConnected)
+                                    
                                     if (isUsbTethering && isPcConnected) {
                                         Log.i(TAG, "USB Tethering to PC ($action) detected. Assuring mobile data is ON.")
                                         val currentOn = ControlManager.isMobileDataEnabled(context)
@@ -214,6 +220,42 @@ class ScreenStateService : Service() {
             registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(screenReceiver, filter)
+        }
+    }
+
+    private fun handleAutoUsbTetheringCheck(context: Context, action: String, isUsbTethering: Boolean, isPcConnected: Boolean) {
+        val autoTetheringOn = PrefsManager.isAutoUsbTetheringEnabled(context)
+        if (!autoTetheringOn) return
+
+        if (action == "android.hardware.usb.action.USB_STATE" || action == Intent.ACTION_POWER_CONNECTED || action == Intent.ACTION_POWER_DISCONNECTED) {
+            if (isPcConnected) {
+                if (!isUsbTethering) {
+                    autoUsbTetheringRunnable?.let { handler.removeCallbacks(it) }
+                    val runnable = Runnable {
+                        Thread {
+                            val stillConnected = isUsbConnectedToComputer(context)
+                            val stillNotTethering = !isUsbTetheringConfigured(context)
+                            if (stillConnected && stillNotTethering) {
+                                Log.i(TAG, "Auto Usb Tethering: PC connected, currently not tethering. Enabling RNDIS via Shizuku...")
+                                ControlManager.addShellLog("Auto USB Tethering: Enabling RNDIS")
+                                val res = com.example.utils.ShizukuHelper.runCommand("svc usb setFunctions rndis")
+                                Log.i(TAG, "Shizuku setFunctions rndis result: ${res.exitCode} ${res.stdout} ${res.stderr}")
+                            } else {
+                                Log.i(TAG, "Auto Usb Tethering: Debounce check failed (Connected=$stillConnected, NotTethering=$stillNotTethering), aborted.")
+                            }
+                        }.start()
+                    }
+                    autoUsbTetheringRunnable = runnable
+                    // Wait 2s for stable connection
+                    handler.postDelayed(runnable, 2000L)
+                }
+            } else {
+                autoUsbTetheringRunnable?.let { 
+                    handler.removeCallbacks(it) 
+                    Log.i(TAG, "Auto Usb Tethering: Disconnected from PC, aborted pending tethering enable.")
+                }
+                autoUsbTetheringRunnable = null
+            }
         }
     }
 
@@ -495,9 +537,34 @@ class ScreenStateService : Service() {
         return try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
             if (audioManager != null) {
-                // To prevent false positives when audio sessions are passive or paused without output,
-                // we require music stream volume to be active (> 0).
-                audioManager.isMusicActive && audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) > 0
+                // Check if in a phone call or VoIP / WeChat call
+                val inCall = audioManager.mode == android.media.AudioManager.MODE_IN_CALL || 
+                             audioManager.mode == android.media.AudioManager.MODE_IN_COMMUNICATION
+                
+                // To prevent false positives, check music active and volume above 0
+                val musicActive = audioManager.isMusicActive && audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) > 0
+
+                // In modern Android versions, we can check active playback configurations for things like TTS and browser audio
+                var isOtherPlaybackActive = false
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    try {
+                        val playbacks = audioManager.activePlaybackConfigurations
+                        if (playbacks != null) {
+                            for (playback in playbacks) {
+                                // Use reflection to avoid API level compilation issues if any, PLAYER_STATE_STARTED is 2.
+                                val state = playback.javaClass.getMethod("getPlayerState").invoke(playback) as? Int
+                                if (state == 2) {
+                                    isOtherPlaybackActive = true
+                                    break
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "AudioPlaybackConfiguration reflection failed: ${e.message}")
+                    }
+                }
+
+                inCall || musicActive || isOtherPlaybackActive
             } else {
                 false
             }

@@ -357,15 +357,17 @@ object ControlManager {
 
         data class RootSimRecord(
             val subId: Int, 
-            val slotIndex: Int, 
+            val slotIndex: Int,
+            val simId: Int,
             val displayName: String, 
             val carrierName: String,
             val number: String, 
             val isActiveRoot: Boolean,
+            val uiccApplicationsEnabled: Int?,
             val hasValidIccId: Boolean,
             val iccId: String
         )
-        val rootSims = mutableMapOf<Int, RootSimRecord>() // slotIndex -> RootSimRecord
+        val allRootRecords = mutableListOf<RootSimRecord>()
 
         // Phone count evaluation (Do this first to filter invalid slots from root info)
         val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
@@ -385,6 +387,7 @@ object ControlManager {
                     
                     var subId = -1
                     var slotIndex = -1
+                    var simId = -1
                     var displayName = ""
                     var carrierName = ""
                     var number = ""
@@ -403,7 +406,8 @@ object ControlManager {
                         
                         when (key) {
                             "_id", "subscription_id", "sub_id" -> subId = value.toIntOrNull() ?: subId
-                            "slot_index", "phone_id", "sim_slot_index", "sim_slot", "slot", "simslotindex", "simslot", "sim_id" -> slotIndex = value.toIntOrNull() ?: slotIndex
+                            "sim_id" -> simId = value.toIntOrNull() ?: simId
+                            "slot_index", "phone_id", "sim_slot_index", "sim_slot", "slot", "simslotindex", "simslot" -> slotIndex = value.toIntOrNull() ?: slotIndex
                             "display_name", "name" -> displayName = value
                             "carrier_name", "carrier" -> carrierName = value
                             "number", "address" -> number = value
@@ -431,13 +435,22 @@ object ControlManager {
                     } else {
                         fallbackActiveState
                     }
-                    
-                    if (subId != -1 && slotIndex in 0 until phoneCount) {
-                        // Sometimes there are multiple rows for one slot, we prefer active ones or newer ones
-                        val existing = rootSims[slotIndex]
-                        if (existing == null || (!existing.isActiveRoot && isActiveRoot) || (existing.subId < subId && existing.isActiveRoot == isActiveRoot)) {
-                            rootSims[slotIndex] = RootSimRecord(subId, slotIndex, displayName, carrierName, number, isActiveRoot, hasValidIccId, iccId)
-                        }
+
+                    if (subId != -1) {
+                        allRootRecords.add(
+                            RootSimRecord(
+                                subId = subId,
+                                slotIndex = slotIndex,
+                                simId = simId,
+                                displayName = displayName,
+                                carrierName = carrierName,
+                                number = number,
+                                isActiveRoot = isActiveRoot,
+                                uiccApplicationsEnabled = uiccApplicationsEnabled,
+                                hasValidIccId = hasValidIccId,
+                                iccId = iccId
+                            )
+                        )
                     }
                 }
             }
@@ -467,7 +480,20 @@ object ControlManager {
                     infoForSlot = activeList.firstOrNull { it.simSlotIndex == slot }
                 }
 
-                val rootRec = rootSims[slot]
+                val explicitMatches = allRootRecords.filter { it.slotIndex == slot || it.simId == slot }
+                val explicitHighest = explicitMatches.maxByOrNull { it.subId }
+                
+                val rootRec = if (explicitHighest != null) {
+                    explicitHighest
+                } else if (isSimSlotInserted(context, slot)) {
+                    val unclaimedDisabled = allRootRecords.filter { 
+                        it.uiccApplicationsEnabled == 0 && 
+                        it.subId !in processedSubIds
+                    }
+                    unclaimedDisabled.maxByOrNull { it.subId }
+                } else {
+                    null
+                }
 
                 if (infoForSlot != null) {
                     // It's definitely active and inserted
@@ -622,6 +648,22 @@ object ControlManager {
                 ShellUtils.runCommand("content update --uri content://telephony/siminfo --bind $col:i:1 --where \"_id=$subId\"", useRoot = true)
             }
             ShellUtils.runCommand("am broadcast -a android.intent.action.ACTION_SUBINFO_RECORD_UPDATED", useRoot = true)
+        }
+        
+        // Anti-System-Dialog logic: set default data to the remaining active SIM *before* we disable this one.
+        if (!enable && remainingSubId != -1) {
+            // Put it via settings
+            ShellUtils.runCommand("settings put global multi_sim_data_call $remainingSubId", useRoot = true)
+            ShellUtils.runCommand("settings put global multi_sim_voice_call $remainingSubId", useRoot = true)
+            ShellUtils.runCommand("settings put global multi_sim_sms $remainingSubId", useRoot = true)
+            ShellUtils.runCommand("settings put global user_preferred_data_sub $remainingSubId", useRoot = true)
+            // Put it via content framework if possible
+            ShellUtils.runCommand("content call --uri content://telephony/siminfo --method setDefaultDataSubId --extra subId:i:$remainingSubId", useRoot = true)
+            
+            // Try to set defaults through cmd commands
+            ShellUtils.runCommand("cmd phone default-data $remainingSubId", useRoot = true)
+            ShellUtils.runCommand("cmd phone set-default-data-sub $remainingSubId", useRoot = true)
+            ShellUtils.runCommand("cmd phone set-user-preferred-data-sub $remainingSubId", useRoot = true)
         }
 
         // 1. Try app_process root java api
