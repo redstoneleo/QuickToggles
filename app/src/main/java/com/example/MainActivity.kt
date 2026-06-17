@@ -53,6 +53,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import rikka.shizuku.Shizuku
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -119,6 +120,21 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     var isRootAvailable by remember { mutableStateOf(false) }
     var checkingRoot by remember { mutableStateOf(false) }
     var isShizukuAvailable by remember { mutableStateOf(ShizukuHelper.isShizukuAvailable()) }
+
+    DisposableEffect(Unit) {
+        val binderReceivedListener = Shizuku.OnBinderReceivedListener {
+            isShizukuAvailable = ShizukuHelper.isShizukuAvailable()
+        }
+        val binderDeadListener = Shizuku.OnBinderDeadListener {
+            isShizukuAvailable = false
+        }
+        Shizuku.addBinderReceivedListener(binderReceivedListener)
+        Shizuku.addBinderDeadListener(binderDeadListener)
+        onDispose {
+            Shizuku.removeBinderReceivedListener(binderReceivedListener)
+            Shizuku.removeBinderDeadListener(binderDeadListener)
+        }
+    }
 
     var isDataEnabled by remember { mutableStateOf(false) }
     var isWifiEnabled by remember { mutableStateOf(false) }
