@@ -147,8 +147,9 @@ class ScreenStateService : Service() {
                     }
                 }
 
-                // 2. Mobile Data Auto-Switch Logic (spawns separate IO worker since it does networking/shell polling)
-                if (isAutoData) {
+                // 2. Core Event Logic (Data Auto-Switch & Auto USB Tethering)
+                // Spawns separate IO worker since it does networking/shell polling
+                if (isAutoData || isAutoUsbTethering) {
                     val pendingResult = goAsync()
                     Thread {
                         try {
@@ -156,15 +157,17 @@ class ScreenStateService : Service() {
 
                             when (action) {
                                 Intent.ACTION_SCREEN_ON -> {
-                                    Log.i(TAG, "Screen is ON -> Delaying 0.35s before turning mobile data ON")
-                                    try {
-                                        Thread.sleep(350)
-                                    } catch (e: InterruptedException) {
-                                        Log.e(TAG, "Delay interrupted: ${e.message}")
+                                    if (isAutoData) {
+                                        Log.i(TAG, "Screen is ON -> Delaying 0.35s before turning mobile data ON")
+                                        try {
+                                            Thread.sleep(350)
+                                        } catch (e: InterruptedException) {
+                                            Log.e(TAG, "Delay interrupted: ${e.message}")
+                                        }
+                                        Log.i(TAG, "Screen is ON -> (bg) Turning mobile data ON after delay")
+                                        ControlManager.setMobileDataEnabled(context, true)
+                                        refreshWidget(context)
                                     }
-                                    Log.i(TAG, "Screen is ON -> (bg) Turning mobile data ON after delay")
-                                    ControlManager.setMobileDataEnabled(context, true)
-                                    refreshWidget(context)
                                 }
                                 Intent.ACTION_POWER_CONNECTED,
                                 Intent.ACTION_POWER_DISCONNECTED,
@@ -174,23 +177,27 @@ class ScreenStateService : Service() {
                                     
                                     handleAutoUsbTetheringCheck(context, action, isUsbTethering, isPcConnected)
                                     
-                                    if (isUsbTethering && isPcConnected) {
-                                        Log.i(TAG, "USB Tethering to PC ($action) detected. Assuring mobile data is ON.")
-                                        val currentOn = ControlManager.isMobileDataEnabled(context)
-                                        if (!currentOn) {
-                                            ControlManager.setMobileDataEnabled(context, true)
-                                            refreshWidget(context)
-                                        }
-                                    } else {
-                                        val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-                                        if (!pm.isInteractive) {
-                                            Log.i(TAG, "State changed ($action): Not Tethered to PC while screen is OFF. Evaluating shutoff...")
-                                            evaluateScreenOffState(context)
+                                    if (isAutoData) {
+                                        if (isUsbTethering && isPcConnected) {
+                                            Log.i(TAG, "USB Tethering to PC ($action) detected. Assuring mobile data is ON.")
+                                            val currentOn = ControlManager.isMobileDataEnabled(context)
+                                            if (!currentOn) {
+                                                ControlManager.setMobileDataEnabled(context, true)
+                                                refreshWidget(context)
+                                            }
+                                        } else {
+                                            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                                            if (!pm.isInteractive) {
+                                                Log.i(TAG, "State changed ($action): Not Tethered to PC while screen is OFF. Evaluating shutoff...")
+                                                evaluateScreenOffState(context)
+                                            }
                                         }
                                     }
                                 }
                                 Intent.ACTION_SCREEN_OFF -> {
-                                    evaluateScreenOffState(context)
+                                    if (isAutoData) {
+                                        evaluateScreenOffState(context)
+                                    }
                                 }
                             }
                         } catch (e: Exception) {
@@ -236,10 +243,33 @@ class ScreenStateService : Service() {
                             val stillConnected = isUsbConnectedToComputer(context)
                             val stillNotTethering = !isUsbTetheringConfigured(context)
                             if (stillConnected && stillNotTethering) {
-                                Log.i(TAG, "Auto Usb Tethering: PC connected, currently not tethering. Enabling RNDIS via Shizuku...")
-                                ControlManager.addShellLog("Auto USB Tethering: Enabling RNDIS")
-                                val res = com.example.utils.ShizukuHelper.runCommand("svc usb setFunctions rndis")
-                                Log.i(TAG, "Shizuku setFunctions rndis result: ${res.exitCode} ${res.stdout} ${res.stderr}")
+                                Log.i(TAG, "Auto Usb Tethering: PC connected, currently not tethering. Enabling via UI Click simulation...")
+                                ControlManager.addShellLog("Auto USB Tethering: Simulating UI Click")
+                                AutoTetheringAccessibilityService.shouldAutoClick = true
+                                var launched = false
+                                val intentsToTry = listOf(
+                                    Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"),
+                                    Intent().setClassName("com.android.settings", "com.android.settings.Settings\$TetherSettingsActivity"),
+                                    Intent("com.android.settings.TETHER_SETTINGS"),
+                                    Intent("android.settings.WIRELESS_SETTINGS"),
+                                    Intent("android.settings.SETTINGS")
+                                )
+                                
+                                for (intent in intentsToTry) {
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    try {
+                                        context.startActivity(intent)
+                                        launched = true
+                                        Log.i(TAG, "Successfully launched tether settings with: $intent")
+                                        break
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to launch $intent")
+                                    }
+                                }
+                                
+                                if (!launched) {
+                                    Log.e(TAG, "Could not launch any settings activity for tethering.")
+                                }
                             } else {
                                 Log.i(TAG, "Auto Usb Tethering: Debounce check failed (Connected=$stillConnected, NotTethering=$stillNotTethering), aborted.")
                             }

@@ -8,4 +8,5 @@
     <string name="root_status_title">Root 权限状态</string>
     <string name="root_status_granted">已获取 Root 权限 (能完美控制移动数据/GPS)</string>
     <string name="root_status_denied">未获取 Root 权限 (控制可能受限，建议授予)</string>
+    <string name="accessibility_service_description">此无障碍服务用于在连接数据线时自动开启 USB 网络共享。我们不会收集任何个人隐私数据。</string>
 </resources>

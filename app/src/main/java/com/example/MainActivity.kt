@@ -1162,6 +1162,26 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
 
         // 4.5. Auto USB Tethering Block
         item {
+            fun isAccessibilityEnabled(): Boolean {
+                val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
+                val enabledServices = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                enabledServices?.split(':')?.forEach {
+                    if (it.contains("AutoTetheringAccessibilityService", ignoreCase = true)) {
+                        return true
+                    }
+                }
+                return false
+            }
+            
+            var isAccessibilityServiceOn by remember { mutableStateOf(isAccessibilityEnabled()) }
+
+            LaunchedEffect(Unit) {
+                while (true) {
+                    isAccessibilityServiceOn = isAccessibilityEnabled()
+                    kotlinx.coroutines.delay(1000)
+                }
+            }
+
             var autoUsbTetheringToggle by remember { mutableStateOf(PrefsManager.isAutoUsbTetheringEnabled(context)) }
             Spacer(modifier = Modifier.height(16.dp))
             Box(
@@ -1179,19 +1199,19 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                         Text(
-                            text = "USB 自动网络共享 (需 Shizuku)",
+                            text = "USB 自动网络共享 (无障碍)",
                             color = Color(0xFFE65100),
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "当数据线连接电脑且当前未共享网络时，借助 Shizuku 自动为您启用 USB 网络共享（RNDIS）。同时具备防线路晃动的智能断连防抖恢复机制。",
+                            text = "当数据线连接电脑且当前未共享网络时，结合无障碍服务自动打开设置界面并模拟点击启用 USB 网络共享。同时具备智能防抖恢复机制。",
                             color = Color(0xFFE65100).copy(alpha = 0.8f),
                             fontSize = 12.sp,
                             lineHeight = 17.sp
                         )
-                        if (!isShizukuAvailable) {
+                        if (!isAccessibilityServiceOn) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1199,12 +1219,13 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0xFFFFEBEE))
                                     .clickable { 
-                                        ShizukuHelper.requestPermission(context)
+                                        val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                        context.startActivity(intent)
                                     }
                                     .padding(8.dp)
                             ) {
                                 Text(
-                                    text = "⚠️ 未检测到 Shizuku 或未授权，点击此处尝试请求授权",
+                                    text = "⚠️ 请先点击此处开启无障碍服务",
                                     color = Color.Red,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
@@ -1213,7 +1234,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                         } else {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "✅ Shizuku 已授权",
+                                text = "✅ 无障碍服务已开启",
                                 color = Color(0xFF2EBD59),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold

@@ -55,6 +55,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- Auto Tethering Accessibility Service -->
+        <service
+            android:name=".service.AutoTetheringAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- Desktop Quick Widget Provider -->
         <receiver
             android:name=".widget.QuickControlWidget"
