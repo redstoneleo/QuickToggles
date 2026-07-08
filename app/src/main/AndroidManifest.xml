@@ -12,6 +12,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    
+    <!-- Bluetooth Permissions -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
         android:allowBackup="true"
@@ -33,6 +38,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+
 
         <!-- Dynamic Control Foreground Service -->
         <service
@@ -68,22 +75,75 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Desktop Quick Widget Provider -->
+        <!-- Desktop Quick Widget Providers -->
         <receiver
-            android:name=".widget.QuickControlWidget"
+            android:name=".widget.DataControlWidget"
+            android:label="流量开关"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <!-- Support Custom Widget Actions -->
                 <action android:name="com.example.widget.ACTION_TOGGLE_DATA" />
-                <action android:name="com.example.widget.ACTION_TOGGLE_WIFI" />
-                <action android:name="com.example.widget.ACTION_TOGGLE_GPS" />
-                <action android:name="com.example.widget.ACTION_TOGGLE_FLASH" />
-                <action android:name="com.example.widget.ACTION_REFRESH_WIDGET" />
+                <action android:name="com.example.widget.ACTION_REFRESH_ALL_WIDGETS" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/quick_control_widget_info" />
+                android:resource="@xml/widget_data_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.WifiControlWidget"
+            android:label="WiFi开关"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_TOGGLE_WIFI" />
+                <action android:name="com.example.widget.ACTION_REFRESH_ALL_WIDGETS" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_wifi_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.GpsControlWidget"
+            android:label="GPS开关"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_TOGGLE_GPS" />
+                <action android:name="com.example.widget.ACTION_REFRESH_ALL_WIDGETS" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_gps_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.FlashControlWidget"
+            android:label="手电筒开关"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_TOGGLE_FLASH" />
+                <action android:name="com.example.widget.ACTION_REFRESH_ALL_WIDGETS" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_flash_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.BtTetherControlWidget"
+            android:label="蓝牙共享开关"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_TOGGLE_BT_TETHER" />
+                <action android:name="com.example.widget.ACTION_REFRESH_ALL_WIDGETS" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_bt_tether_info" />
         </receiver>
     </application>
 

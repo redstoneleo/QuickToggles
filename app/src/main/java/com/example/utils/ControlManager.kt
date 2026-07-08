@@ -1,6 +1,7 @@
 package com.example.utils
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.camera2.CameraManager
 import android.location.LocationManager
 import android.net.wifi.WifiManager
@@ -34,26 +35,25 @@ object ControlManager {
     }
 
     private var isTorchOn = false
+    private var isTorchListenerRegistered = false
 
     // Initialize torch listener to monitor physical state changes as well
     fun initTorchListener(context: Context) {
+        if (isTorchListenerRegistered) return
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                cameraManager.registerTorchCallback(object : CameraManager.TorchCallback() {
-                    override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
-                        super.onTorchModeChanged(cameraId, enabled)
-                        isTorchOn = enabled
-                    }
-                }, null)
-            } else {
-                cameraManager.registerTorchCallback(object : CameraManager.TorchCallback() {
-                    override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
-                        super.onTorchModeChanged(cameraId, enabled)
-                        isTorchOn = enabled
-                    }
-                }, android.os.Handler(context.mainLooper))
+            val callback = object : CameraManager.TorchCallback() {
+                override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+                    super.onTorchModeChanged(cameraId, enabled)
+                    isTorchOn = enabled
+                }
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                cameraManager.registerTorchCallback(callback, null)
+            } else {
+                cameraManager.registerTorchCallback(callback, android.os.Handler(context.mainLooper))
+            }
+            isTorchListenerRegistered = true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register torch callback: ${e.message}")
         }
@@ -86,7 +86,209 @@ object ControlManager {
         return result.stdout.trim() == "1"
     }
 
+    fun isBluetoothTetheringActive(context: Context): Boolean {
+        // 1. If bluetooth is off, tethering is definitely off
+        try {
+            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            if (adapter == null || !adapter.isEnabled) {
+                return false
+            }
+            
+            // 2. Try reflection to get BluetoothPan proxy and check isTetheringOn
+            var isTetheringOn = false
+            val latch = java.util.concurrent.CountDownLatch(1)
+            adapter.getProfileProxy(context.applicationContext, object : android.bluetooth.BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: android.bluetooth.BluetoothProfile) {
+                    try {
+                        val isTetheringOnMethod = proxy.javaClass.getDeclaredMethod("isTetheringOn")
+                        isTetheringOnMethod.isAccessible = true
+                        isTetheringOn = isTetheringOnMethod.invoke(proxy) as Boolean
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Reflection on BluetoothPan failed: ${e.message}")
+                    } finally {
+                        try {
+                            adapter.closeProfileProxy(5, proxy) // 5 is BluetoothProfile.PAN
+                        } catch (e: Exception) {}
+                        latch.countDown()
+                    }
+                }
+
+                override fun onServiceDisconnected(profile: Int) {
+                    latch.countDown()
+                }
+            }, 5) // 5 is BluetoothProfile.PAN
+
+            // Wait up to 150ms for proxy connection
+            latch.await(150, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (isTetheringOn) {
+                return true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get BluetoothPan proxy via reflection: ${e.message}")
+        }
+
+        // 3. Fallback: check network interfaces (original logic)
+        var isActive = false
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            if (interfaces != null) {
+                while (interfaces.hasMoreElements()) {
+                    val networkInterface = interfaces.nextElement()
+                    val name = networkInterface.name.lowercase()
+                    if (networkInterface.isUp) {
+                        if (name.contains("pan") || name.contains("bnep") || name.contains("bt-pan")) {
+                            isActive = true
+                            break
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check bluetooth tethering interface: ${e.message}")
+        }
+
+        if (!isActive && (ShellUtils.isRootAvailable() || ShizukuHelper.isShizukuAvailable())) {
+            try {
+                val ipLink = ShellUtils.runCommand("ip link show up", useRoot = true)
+                if (ipLink.isSuccess) {
+                    val output = ipLink.stdout.lowercase()
+                    if (output.contains("pan") || output.contains("bnep") || output.contains("bt-pan")) {
+                        isActive = true
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to check bluetooth tethering interface via root: ${e.message}")
+            }
+        }
+        
+        // 4. Fallback: check settings database
+        if (!isActive) {
+            try {
+                val settingsVal = android.provider.Settings.Global.getInt(context.contentResolver, "bluetooth_tethering_on", -1)
+                if (settingsVal != -1) {
+                    return settingsVal == 1
+                }
+            } catch (e: Exception) {}
+        }
+        
+        return isActive
+    }
+
+    fun setBluetoothTetheringEnabled(context: Context, enabled: Boolean): Boolean {
+        // Ensure Bluetooth is turned on first before enabling tethering
+        if (enabled) {
+            try {
+                val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+                if (adapter != null && !adapter.isEnabled) {
+                    if (ShellUtils.isRootAvailable() || ShizukuHelper.isShizukuAvailable()) {
+                        ShellUtils.runCommand("svc bluetooth enable", useRoot = true)
+                        ShellUtils.runCommand("cmd bluetooth_manager enable", useRoot = true)
+                        Thread.sleep(1500)
+                    } else {
+                        adapter.enable()
+                        Thread.sleep(1000)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to enable Bluetooth prior to tethering: ${e.message}")
+            }
+        }
+
+        // First try standard Root shell command for newer Android versions
+        if (ShellUtils.isRootAvailable() || ShizukuHelper.isShizukuAvailable()) {
+            val startCmd = "cmd tethering start-tethering 2"
+            val stopCmd = "cmd tethering stop-tethering 2"
+            val cmd = if (enabled) startCmd else stopCmd
+            val result = ShellUtils.runCommand(cmd, useRoot = true)
+            if (result.isSuccess) {
+                Log.i(TAG, "Successfully toggled Bluetooth Tethering via cmd tethering")
+                if (!enabled) {
+                    ShellUtils.runCommand("svc bluetooth disable", useRoot = true)
+                    ShellUtils.runCommand("cmd bluetooth_manager disable", useRoot = true)
+                    Log.i(TAG, "Disabled Bluetooth via shell")
+                }
+                return true
+            }
+        }
+
+        // Try reflection fallback before opening Settings
+        var reflectionSuccess = false
+        try {
+            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            if (adapter != null) {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                adapter.getProfileProxy(context, object : android.bluetooth.BluetoothProfile.ServiceListener {
+                    override fun onServiceConnected(profile: Int, proxy: android.bluetooth.BluetoothProfile) {
+                        try {
+                            val method = proxy.javaClass.getDeclaredMethod("setBluetoothTethering", Boolean::class.java)
+                            method.isAccessible = true
+                            method.invoke(proxy, enabled)
+                            reflectionSuccess = true
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Reflection setBluetoothTethering failed: ${e.message}")
+                        } finally {
+                            try {
+                                adapter.closeProfileProxy(5, proxy)
+                            } catch (e: Exception) {}
+                            latch.countDown()
+                        }
+                    }
+                    override fun onServiceDisconnected(profile: Int) {
+                        latch.countDown()
+                    }
+                }, 5) // BluetoothProfile.PAN
+                latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                
+                if (reflectionSuccess) {
+                    Log.i(TAG, "Successfully toggled Bluetooth tethering via reflection")
+                    if (!enabled) {
+                        adapter.disable()
+                    }
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get BluetoothPan proxy via reflection: ${e.message}")
+        }
+
+        // Fallback to accessibility service
+        var launched = false
+        val intentsToTry = listOf(
+            Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"),
+            Intent().setClassName("com.android.settings", "com.android.settings.Settings\$TetherSettingsActivity"),
+            Intent("com.android.settings.TETHER_SETTINGS"),
+            Intent("android.settings.WIRELESS_SETTINGS"),
+            Intent("android.settings.SETTINGS")
+        )
+        for (intent in intentsToTry) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            try {
+                com.example.service.AutoTetheringAccessibilityService.startTask(
+                    context, 
+                    com.example.service.AutoTask.TOGGLE_BLUETOOTH_TETHERING, 
+                    intent,
+                    enabled
+                )
+                launched = true
+                Log.i(TAG, "Successfully launched tether settings with: $intent")
+                break
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to launch $intent")
+            }
+        }
+        return launched
+    }
+
     fun setMobileDataEnabled(context: Context, enabled: Boolean): Boolean {
+        if (!ShellUtils.isRootAvailable() && !ShizukuHelper.isShizukuAvailable()) {
+            com.example.service.AutoTetheringAccessibilityService.startTask(
+                context, 
+                com.example.service.AutoTask.TOGGLE_MOBILE_DATA, 
+                android.provider.Settings.ACTION_NETWORK_OPERATOR_SETTINGS,
+                enabled
+            )
+            return true
+        }
         val op = if (enabled) "enable" else "disable"
         val valInt = if (enabled) "1" else "0"
         val valBool = if (enabled) "true" else "false"
@@ -206,6 +408,15 @@ object ControlManager {
 
     // --- SLEEP MODE ---
     fun setSleepModeActive(context: Context, active: Boolean): Boolean {
+        if (!ShellUtils.isRootAvailable() && !ShizukuHelper.isShizukuAvailable()) {
+            com.example.service.AutoTetheringAccessibilityService.startTask(
+                context, 
+                com.example.service.AutoTask.TOGGLE_AIRPLANE_MODE, 
+                android.provider.Settings.ACTION_AIRPLANE_MODE_SETTINGS,
+                active
+            )
+            return true
+        }
         val opState = if (active) "1" else "0"
         val opBool = if (active) "true" else "false"
         
@@ -250,6 +461,15 @@ object ControlManager {
     }
 
     fun setWifiEnabled(context: Context, enabled: Boolean): Boolean {
+        if (!ShellUtils.isRootAvailable() && !ShizukuHelper.isShizukuAvailable()) {
+            com.example.service.AutoTetheringAccessibilityService.startTask(
+                context, 
+                com.example.service.AutoTask.TOGGLE_WIFI, 
+                android.provider.Settings.ACTION_WIFI_SETTINGS,
+                enabled
+            )
+            return true
+        }
         // Try standard Android SDK api first (Instant, zero shell overhead on compatible SDKs or when authorized/system app)
         val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         if (wifiManager != null) {
@@ -299,6 +519,15 @@ object ControlManager {
     }
 
     fun setGpsEnabled(context: Context, enabled: Boolean): Boolean {
+        if (!ShellUtils.isRootAvailable() && !ShizukuHelper.isShizukuAvailable()) {
+            com.example.service.AutoTetheringAccessibilityService.startTask(
+                context, 
+                com.example.service.AutoTask.TOGGLE_GPS, 
+                android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS,
+                enabled
+            )
+            return true
+        }
         val opValue = if (enabled) "true" else "false"
         val modeValue = if (enabled) "3" else "0" // 3 = HIGH_ACCURACY, 0 = OFF
 

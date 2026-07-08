@@ -14,26 +14,8 @@ object ShellUtils {
     private var rootReader: BufferedReader? = null
 
     fun isRootAvailable(): Boolean {
-        var process: Process? = null
-        var os: DataOutputStream? = null
-        try {
-            process = Runtime.getRuntime().exec("su")
-            os = DataOutputStream(process.outputStream)
-            os.writeBytes("exit\n")
-            os.flush()
-            val exitValue = process.waitFor()
-            return exitValue == 0
-        } catch (e: Exception) {
-            Log.e(TAG, "Root check failed: ${e.message}")
-            return false
-        } finally {
-            try {
-                os?.close()
-                process?.destroy()
-            } catch (e: Exception) {
-                // Ignore
-            }
-        }
+        val result = runCommand("id", true, 5000L)
+        return result.isSuccess && result.stdout.contains("uid=0(root)")
     }
 
     private fun initRootProcess() {

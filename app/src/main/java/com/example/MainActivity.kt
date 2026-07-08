@@ -48,7 +48,7 @@ import com.example.utils.ControlManager
 import com.example.utils.PrefsManager
 import com.example.utils.ShellUtils
 import com.example.utils.ShizukuHelper
-import com.example.widget.QuickControlWidget
+import com.example.widget.BaseControlWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -101,11 +101,8 @@ class MainActivity : ComponentActivity() {
     }
 
     fun refreshAllWidgets() {
-        val appWidgetManager = AppWidgetManager.getInstance(this)
-        val thisWidget = ComponentName(this, QuickControlWidget::class.java)
-        val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
-        val intent = Intent(this, QuickControlWidget::class.java).apply {
-            action = QuickControlWidget.ACTION_REFRESH_WIDGET
+        val intent = Intent(BaseControlWidget.ACTION_REFRESH_ALL_WIDGETS).apply {
+            setPackage(packageName)
         }
         sendBroadcast(intent)
     }
@@ -140,6 +137,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     var isWifiEnabled by remember { mutableStateOf(false) }
     var isGpsEnabled by remember { mutableStateOf(false) }
     var isFlashlightEnabled by remember { mutableStateOf(false) }
+    var isBtTetheringEnabled by remember { mutableStateOf(false) }
     var currentStrategy by remember { mutableStateOf(PrefsManager.getWorkingStrategy(context)) }
 
     // Live SIM card list
@@ -150,6 +148,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     var lastWifiToggleTime by remember { mutableStateOf(0L) }
     var lastGpsToggleTime by remember { mutableStateOf(0L) }
     var lastFlashlightToggleTime by remember { mutableStateOf(0L) }
+    var lastBtTetheringToggleTime by remember { mutableStateOf(0L) }
 
     // 2. Local Customization Preferences
     var autoDataToggle by remember { mutableStateOf(PrefsManager.isAutoDataToggleEnabled(context)) }
@@ -179,6 +178,9 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
     ).apply {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            add(Manifest.permission.BLUETOOTH_CONNECT)
         }
     }.toTypedArray()
 
@@ -225,6 +227,9 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
         }
         if (now - lastFlashlightToggleTime > 2500) {
             isFlashlightEnabled = ControlManager.isFlashlightEnabled()
+        }
+        if (now - lastBtTetheringToggleTime > 2500) {
+            isBtTetheringEnabled = ControlManager.isBluetoothTetheringActive(context)
         }
         currentStrategy = PrefsManager.getWorkingStrategy(context)
     }
@@ -372,7 +377,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = "4x1 Layout",
+                                text = "5x1 Layout",
                                 color = Color(0xFF001D36),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold
@@ -391,7 +396,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                     ) {
                         // Data Column
                         PreviewBentoMiniTile(
-                            name = if (isDataEnabled) "Data On" else "Data Off",
+                            name = "流量",
                             isOn = isDataEnabled,
                             iconRes = R.drawable.ic_cellular_data,
                             activeColor = activeColor,
@@ -419,7 +424,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
 
                         // WiFi Column
                         PreviewBentoMiniTile(
-                            name = if (isWifiEnabled) "WiFi On" else "WiFi Off",
+                            name = "WiFi",
                             isOn = isWifiEnabled,
                             iconRes = R.drawable.ic_wifi,
                             activeColor = activeColor,
@@ -445,7 +450,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
 
                         // GPS Column
                         PreviewBentoMiniTile(
-                            name = if (isGpsEnabled) "GPS On" else "GPS Off",
+                            name = "GPS",
                             isOn = isGpsEnabled,
                             iconRes = R.drawable.ic_gps,
                             activeColor = activeColor,
@@ -471,7 +476,7 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
 
                         // Flashlight Column
                         PreviewBentoMiniTile(
-                            name = if (isFlashlightEnabled) "Flash On" else "Flash Off",
+                            name = "手电",
                             isOn = isFlashlightEnabled,
                             iconRes = R.drawable.ic_flashlight,
                             activeColor = activeColor,
@@ -486,6 +491,31 @@ fun ControlPanelScreen(modifier: Modifier = Modifier, activity: MainActivity) {
                                     withContext(Dispatchers.Main) {
                                         if (!result) {
                                             isFlashlightEnabled = !target
+                                        }
+                                        probeHardwareStates()
+                                        activity.refreshAllWidgets()
+                                    }
+                                }
+                            }
+                        )
+
+                        // BT Tethering Column
+                        PreviewBentoMiniTile(
+                            name = "蓝牙共享",
+                            isOn = isBtTetheringEnabled,
+                            iconRes = R.drawable.ic_bluetooth,
+                            activeColor = activeColor,
+                            inactiveColor = inactiveColor,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                val target = !isBtTetheringEnabled
+                                isBtTetheringEnabled = target
+                                lastBtTetheringToggleTime = System.currentTimeMillis()
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    val result = ControlManager.setBluetoothTetheringEnabled(context, target)
+                                    withContext(Dispatchers.Main) {
+                                        if (!result) {
+                                            isBtTetheringEnabled = !target
                                         }
                                         probeHardwareStates()
                                         activity.refreshAllWidgets()

@@ -16,7 +16,6 @@ import androidx.core.app.NotificationCompat
 import com.example.R
 import com.example.utils.ControlManager
 import com.example.utils.PrefsManager
-import com.example.widget.QuickControlWidget
 
 class ScreenStateService : Service() {
 
@@ -31,6 +30,7 @@ class ScreenStateService : Service() {
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var usb5gRunnable: Runnable? = null
     private var autoUsbTetheringRunnable: Runnable? = null
+    private var screenOffEvalRunnable: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -158,6 +158,12 @@ class ScreenStateService : Service() {
                             when (action) {
                                 Intent.ACTION_SCREEN_ON -> {
                                     if (isAutoData) {
+                                        screenOffEvalRunnable?.let {
+                                            handler.removeCallbacks(it)
+                                            screenOffEvalRunnable = null
+                                            Log.i(TAG, "Screen turned ON. Cancelled pending screen-off data shutoff evaluation.")
+                                        }
+
                                         Log.i(TAG, "Screen is ON -> Delaying 0.35s before turning mobile data ON")
                                         try {
                                             Thread.sleep(350)
@@ -196,7 +202,22 @@ class ScreenStateService : Service() {
                                 }
                                 Intent.ACTION_SCREEN_OFF -> {
                                     if (isAutoData) {
-                                        evaluateScreenOffState(context)
+                                        screenOffEvalRunnable?.let { handler.removeCallbacks(it) }
+                                        val runnable = Runnable {
+                                            Thread {
+                                                val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                                                if (!pm.isInteractive) {
+                                                    Log.i(TAG, "Executing delayed screen off state evaluation...")
+                                                    evaluateScreenOffState(context)
+                                                } else {
+                                                    Log.i(TAG, "Screen is on, skipping delayed shutoff evaluation.")
+                                                }
+                                            }.start()
+                                        }
+                                        screenOffEvalRunnable = runnable
+                                        // Delay evaluation by 15 seconds to allow buffer playback or app pause/resume to stabilize
+                                        handler.postDelayed(runnable, 15000L)
+                                        Log.i(TAG, "Screen is OFF -> Scheduled data shutoff evaluation in 15 seconds")
                                     }
                                 }
                             }
@@ -245,7 +266,8 @@ class ScreenStateService : Service() {
                             if (stillConnected && stillNotTethering) {
                                 Log.i(TAG, "Auto Usb Tethering: PC connected, currently not tethering. Enabling via UI Click simulation...")
                                 ControlManager.addShellLog("Auto USB Tethering: Simulating UI Click")
-                                AutoTetheringAccessibilityService.shouldAutoClick = true
+                                AutoTetheringAccessibilityService.currentTask = AutoTask.TOGGLE_USB_TETHERING
+                                AutoTetheringAccessibilityService.currentTargetState = true
                                 var launched = false
                                 val intentsToTry = listOf(
                                     Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"),
@@ -292,7 +314,7 @@ class ScreenStateService : Service() {
     private fun evaluateScreenOffState(context: Context) {
         val isWifiAp = isWifiApEnabled(context)
         val isUsbTethering = isUsbTetheringConfigured(context)
-        val isBtTethering = isBluetoothTetheringActive()
+        val isBtTethering = com.example.utils.ControlManager.isBluetoothTetheringActive(context)
         val isAudioActive = isAudioPlaying(context)
         val isPcConnected = isUsbConnectedToComputer(context)
 
@@ -311,6 +333,40 @@ class ScreenStateService : Service() {
         if (isAudioActive) {
             Log.i(TAG, "Audio playback detected. Maintaining mobile data/cellular connection while screen is OFF.")
             return
+        }
+
+        // Check if there's active network traffic (e.g. video buffering or large downloads)
+        // If traffic is > 10KB/s over 2 seconds, we shouldn't cut data yet.
+        try {
+            val rx1 = android.net.TrafficStats.getTotalRxBytes()
+            val tx1 = android.net.TrafficStats.getTotalTxBytes()
+            if (rx1 != android.net.TrafficStats.UNSUPPORTED.toLong() && tx1 != android.net.TrafficStats.UNSUPPORTED.toLong()) {
+                Thread.sleep(2000)
+                val rx2 = android.net.TrafficStats.getTotalRxBytes()
+                val tx2 = android.net.TrafficStats.getTotalTxBytes()
+                val diff = (rx2 - rx1) + (tx2 - tx1)
+                if (diff > 20 * 1024) { // 20 KB in 2s
+                    Log.i(TAG, "Active network traffic detected (${diff / 1024} KB in 2s). Maintaining connection.")
+                    
+                    // We shouldn't drop it now, but we should re-evaluate later when traffic stops!
+                    // Schedule another check in 30 seconds
+                    screenOffEvalRunnable?.let { handler.removeCallbacks(it) }
+                    val runnable = Runnable {
+                        Thread {
+                            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                            if (!pm.isInteractive) {
+                                Log.i(TAG, "Re-evaluating delayed screen off state after traffic paused...")
+                                evaluateScreenOffState(context)
+                            }
+                        }.start()
+                    }
+                    screenOffEvalRunnable = runnable
+                    handler.postDelayed(runnable, 30000L)
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to check network traffic: ${e.message}")
         }
 
         if (isBtTethering) {
@@ -543,36 +599,16 @@ class ScreenStateService : Service() {
         return false
     }
 
-    private fun isBluetoothTetheringActive(): Boolean {
-        try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-            if (interfaces != null) {
-                while (interfaces.hasMoreElements()) {
-                    val networkInterface = interfaces.nextElement()
-                    val name = networkInterface.name.lowercase()
-                    if (networkInterface.isUp) {
-                        if (name.contains("pan") || name.contains("bnep") || name.contains("bt-pan")) {
-                            return true
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to check bluetooth tethering interface: ${e.message}")
-        }
-        return false
-    }
-
     private fun isAudioPlaying(context: Context): Boolean {
         return try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            var isPlaying = false
             if (audioManager != null) {
                 // Check if in a phone call or VoIP / WeChat call
                 val inCall = audioManager.mode == android.media.AudioManager.MODE_IN_CALL || 
                              audioManager.mode == android.media.AudioManager.MODE_IN_COMMUNICATION
                 
-                // To prevent false positives, check music active and volume above 0
-                val musicActive = audioManager.isMusicActive && audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) > 0
+                val musicActive = audioManager.isMusicActive
 
                 // In modern Android versions, we can check active playback configurations for things like TTS and browser audio
                 var isOtherPlaybackActive = false
@@ -594,10 +630,27 @@ class ScreenStateService : Service() {
                     }
                 }
 
-                inCall || musicActive || isOtherPlaybackActive
-            } else {
-                false
+                isPlaying = inCall || musicActive || isOtherPlaybackActive
             }
+            
+            // Fallback for background media players (like YouTube/Bilibili) 
+            // that might hide their audio focus from standard APIs in Android 12+
+            if (!isPlaying && (com.example.utils.ShellUtils.isRootAvailable() || com.example.utils.ShizukuHelper.isShizukuAvailable())) {
+                val mediaSessionRes = com.example.utils.ShellUtils.runCommand("dumpsys media_session | grep -E 'state=3|state=6'", useRoot = true)
+                if (mediaSessionRes.isSuccess && (mediaSessionRes.stdout.contains("state=3") || mediaSessionRes.stdout.contains("state=6"))) {
+                    // state 3 is PLAYING, state 6 is BUFFERING
+                    Log.i(TAG, "isAudioPlaying: Detected media session playing or buffering via dumpsys")
+                    isPlaying = true
+                } else {
+                    val audioRes = com.example.utils.ShellUtils.runCommand("dumpsys audio | grep 'state:started'", useRoot = true)
+                    if (audioRes.isSuccess && audioRes.stdout.contains("state:started", ignoreCase = true)) {
+                        Log.i(TAG, "isAudioPlaying: Detected started audio stream via dumpsys")
+                        isPlaying = true
+                    }
+                }
+            }
+
+            isPlaying
         } catch (e: Exception) {
             Log.e(TAG, "Failed to check if audio is playing: ${e.message}")
             false
@@ -772,8 +825,8 @@ class ScreenStateService : Service() {
     }
 
     private fun refreshWidget(context: Context) {
-        val updateIntent = Intent(context, QuickControlWidget::class.java).apply {
-            action = QuickControlWidget.ACTION_REFRESH_WIDGET
+        val updateIntent = Intent(com.example.widget.BaseControlWidget.ACTION_REFRESH_ALL_WIDGETS).apply {
+            setPackage(context.packageName)
         }
         context.sendBroadcast(updateIntent)
     }
@@ -782,6 +835,7 @@ class ScreenStateService : Service() {
         Log.d(TAG, "ScreenStateService Destroyed, cleaning up receivers")
         usb5gRunnable?.let { handler.removeCallbacks(it) }
         sleepModeRunnable?.let { handler.removeCallbacks(it) }
+        screenOffEvalRunnable?.let { handler.removeCallbacks(it) }
         try {
             screenReceiver?.let {
                 unregisterReceiver(it)
