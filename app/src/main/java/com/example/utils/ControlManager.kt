@@ -118,8 +118,8 @@ object ControlManager {
                 }
             }, 5) // 5 is BluetoothProfile.PAN
 
-            // Wait up to 150ms for proxy connection
-            latch.await(150, java.util.concurrent.TimeUnit.MILLISECONDS)
+            // Wait up to 500ms for proxy connection
+            latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)
             if (isTetheringOn) {
                 return true
             }
@@ -183,10 +183,13 @@ object ControlManager {
                     if (ShellUtils.isRootAvailable() || ShizukuHelper.isShizukuAvailable()) {
                         ShellUtils.runCommand("svc bluetooth enable", useRoot = true)
                         ShellUtils.runCommand("cmd bluetooth_manager enable", useRoot = true)
-                        Thread.sleep(1500)
                     } else {
                         adapter.enable()
-                        Thread.sleep(1000)
+                    }
+                    // Wait until bluetooth is actually enabled (up to 3 seconds)
+                    for (i in 1..30) {
+                        if (adapter.isEnabled) break
+                        Thread.sleep(100)
                     }
                 }
             } catch (e: Exception) {
@@ -200,7 +203,13 @@ object ControlManager {
             val stopCmd = "cmd tethering stop-tethering 2"
             val cmd = if (enabled) startCmd else stopCmd
             val result = ShellUtils.runCommand(cmd, useRoot = true)
-            if (result.isSuccess) {
+            if (result.isSuccess && !result.stdout.contains("SecurityException") && !result.stderr.contains("SecurityException")) {
+                // Wait for state to settle
+                Thread.sleep(800)
+                
+                // Force update the settings global so our app and the system know it's on/off
+                ShellUtils.runCommand("settings put global bluetooth_tethering_on ${if (enabled) 1 else 0}", useRoot = true)
+                
                 Log.i(TAG, "Successfully toggled Bluetooth Tethering via cmd tethering")
                 if (!enabled) {
                     ShellUtils.runCommand("svc bluetooth disable", useRoot = true)

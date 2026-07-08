@@ -164,9 +164,9 @@ class ScreenStateService : Service() {
                                             Log.i(TAG, "Screen turned ON. Cancelled pending screen-off data shutoff evaluation.")
                                         }
 
-                                        Log.i(TAG, "Screen is ON -> Delaying 0.35s before turning mobile data ON")
+                                        Log.i(TAG, "Screen is ON -> Delaying 0.5s before turning mobile data ON")
                                         try {
-                                            Thread.sleep(350)
+                                            Thread.sleep(500)
                                         } catch (e: InterruptedException) {
                                             Log.e(TAG, "Delay interrupted: ${e.message}")
                                         }

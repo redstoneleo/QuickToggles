@@ -1,0 +1,1 @@
+import com.example.utils.ShellUtils; ShellUtils.runCommand("cmd tethering start-tethering 2", true); Thread.sleep(2000); println(ShellUtils.runCommand("settings get global bluetooth_tethering_on", true).stdout)
